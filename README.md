@@ -1,6 +1,6 @@
 # RISC-V on FPGA
 
-A simple RISC-V CPU (RV32I subset) with PCIe BAR interface, targeting Intel Cyclone V FPGA.
+A simple RISC-V CPU (RV32I subset) with PCIe BAR interface, targeting Intel Agilex 7 FPGA.
 
 ## Architecture
 
@@ -92,10 +92,9 @@ verilator --cc ../src/alu.sv ../src/regfile.sv ../src/decoder.sv \
 
 ## Build (FPGA)
 
-Requires Quartus with Cyclone V support:
+Requires Quartus with Agilex 7 support:
 
 ```bash
-module load altera/quartus/20.1
 ./build_fpga.sh 0x01
 ```
 
@@ -124,4 +123,4 @@ uint32_t result = bar->read32(0x2000);
 - [x] FPGA build infrastructure
 - [ ] Add UART peripheral
 - [ ] Add more instructions
-- [ ] Hardware test on Cyclone V
+- [ ] Hardware test on Agilex 7
