@@ -23,7 +23,10 @@ add_fileset QUARTUS_SYNTH QUARTUS_SYNTH "" ""
 set_fileset_property QUARTUS_SYNTH TOP_LEVEL axi_core_hw
 set_fileset_property QUARTUS_SYNTH ENABLE_RELATIVE_INCLUDE_PATHS false
 set_fileset_property QUARTUS_SYNTH ENABLE_FILE_OVERWRITE_MODE true
-add_fileset_file dma_core.sv SYSTEM_VERILOG PATH dma_core.sv
+add_fileset_file alu.sv SYSTEM_VERILOG PATH alu.sv
+add_fileset_file regfile.sv SYSTEM_VERILOG PATH regfile.sv
+add_fileset_file decoder.sv SYSTEM_VERILOG PATH decoder.sv
+add_fileset_file riscv_soc.sv SYSTEM_VERILOG PATH riscv_soc.sv
 add_fileset_file axi_core_hw.sv SYSTEM_VERILOG PATH axi_core_hw.sv TOP_LEVEL_FILE
 
 add_interface axm_m0 axi4 start
