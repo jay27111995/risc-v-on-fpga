@@ -2,3 +2,9 @@ obj_dir/
 *.vcd
 *.o
 *.a
+build/
+*.sof
+*.qws
+db/
+incremental_db/
+output_files/
