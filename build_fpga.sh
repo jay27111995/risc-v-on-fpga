@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # RISC-V on FPGA build script
-# Builds the design for Intel Cyclone V
+# Builds the design for Intel Agilex 7
 
 # Check if exactly one argument was provided
 if [ $# -ne 1 ]; then
