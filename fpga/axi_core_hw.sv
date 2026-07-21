@@ -176,11 +176,30 @@ module axi_core_hw(
   assign bar_waddr = axi_lite_s_awaddr[15:0];
 
   // =========================================================================
+  // Clock divider for RISC-V SoC (500MHz / 4 = 125MHz)
+  // This helps meet timing while keeping AXI at full speed
+  // =========================================================================
+  
+  logic [1:0] clk_div_cnt;
+  logic cpu_clk_en;  // Clock enable for CPU (pulses every 4 cycles)
+  
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      clk_div_cnt <= 0;
+    end else begin
+      clk_div_cnt <= clk_div_cnt + 1;
+    end
+  end
+  
+  assign cpu_clk_en = (clk_div_cnt == 2'b00);
+
+  // =========================================================================
   // RISC-V SoC
   // =========================================================================
 
   riscv_soc u_soc(
     .clk(clk),
+    .clk_en(cpu_clk_en),
     .rst_n(~rst),
     .bar_addr(bar_wen ? bar_waddr : bar_raddr),
     .bar_wdata(axi_lite_s_wdata),
