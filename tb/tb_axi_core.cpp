@@ -14,6 +14,7 @@ public:
         
         // Initialize all inputs
         dut->clk = 0;
+        dut->cpu_clk = 0;
         dut->rst = 1;
         
         // AXI Master inputs (unused, but need valid values)
@@ -23,7 +24,6 @@ public:
         dut->axm_m0_bvalid = 0;
         dut->axm_m0_arready = 1;
         dut->axm_m0_rid = 0;
-        // axm_m0_rdata is 1024 bits - leave as default
         dut->axm_m0_rlast = 0;
         dut->axm_m0_rvalid = 0;
         
@@ -38,44 +38,43 @@ public:
         dut->axi_lite_s_arvalid = 0;
         dut->axi_lite_s_rready = 1;
         
-        // Reset
-        tick();
-        tick();
+        // Reset for a few cycles
+        for (int i = 0; i < 10; i++) tick();
         dut->rst = 0;
-        tick();
+        for (int i = 0; i < 10; i++) tick();
     }
     
     ~AxiTb() { delete dut; }
     
     void tick() {
         dut->clk = 0;
+        dut->cpu_clk = 0;
         dut->eval();
         dut->clk = 1;
+        dut->cpu_clk = 1;
         dut->eval();
         cycle++;
     }
     
     // AXI-Lite write transaction
     void axi_write(uint32_t addr, uint64_t data) {
-        // Present address and data
         dut->axi_lite_s_awaddr = addr;
         dut->axi_lite_s_awvalid = 1;
         dut->axi_lite_s_wdata = data;
-        dut->axi_lite_s_wstrb = 0xFF;  // All bytes valid
+        dut->axi_lite_s_wstrb = 0xFF;
         dut->axi_lite_s_wvalid = 1;
         
-        // Wait for ready
-        while (!dut->axi_lite_s_awready || !dut->axi_lite_s_wready) {
+        int timeout = 100;
+        while ((!dut->axi_lite_s_awready || !dut->axi_lite_s_wready) && timeout-- > 0) {
             tick();
         }
         tick();
         
-        // Deassert valid
         dut->axi_lite_s_awvalid = 0;
         dut->axi_lite_s_wvalid = 0;
         
-        // Wait for response
-        while (!dut->axi_lite_s_bvalid) {
+        timeout = 100;
+        while (!dut->axi_lite_s_bvalid && timeout-- > 0) {
             tick();
         }
         tick();
@@ -83,21 +82,19 @@ public:
     
     // AXI-Lite read transaction
     uint64_t axi_read(uint32_t addr) {
-        // Present address
         dut->axi_lite_s_araddr = addr;
         dut->axi_lite_s_arvalid = 1;
         
-        // Wait for address ready
-        while (!dut->axi_lite_s_arready) {
+        int timeout = 100;
+        while (!dut->axi_lite_s_arready && timeout-- > 0) {
             tick();
         }
         tick();
         
-        // Deassert valid
         dut->axi_lite_s_arvalid = 0;
         
-        // Wait for data
-        while (!dut->axi_lite_s_rvalid) {
+        timeout = 100;
+        while (!dut->axi_lite_s_rvalid && timeout-- > 0) {
             tick();
         }
         uint64_t data = dut->axi_lite_s_rdata;
@@ -114,8 +111,7 @@ int main(int argc, char** argv) {
     
     printf("AXI Core + RISC-V SoC Test\n");
     printf("==========================\n\n");
-    
-    // Test program
+
     uint32_t program[] = {
         0x00500093,  // ADDI x1, x0, 5
         0x00300113,  // ADDI x2, x0, 3
@@ -130,18 +126,30 @@ int main(int argc, char** argv) {
         tb.axi_write(0x1000 + i * 4, program[i]);
     }
     
+    // Verify IMEM content by reading back
+    printf("\nVerifying IMEM content:\n");
+    for (int i = 0; i < 5; i++) {
+        uint64_t val = tb.axi_read(0x1000 + i * 4);
+        printf("  IMEM[%d] = 0x%08lX (expected 0x%08X) %s\n", 
+               i, val, program[i], val == program[i] ? "OK" : "FAIL");
+    }
+    
     // Reset CPU
-    printf("Resetting CPU...\n");
+    printf("\nResetting CPU...\n");
     tb.axi_write(0x00, 0x02);  // RESET
-    for (int i = 0; i < 5; i++) tb.tick();
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // Read status
+    uint64_t status = tb.axi_read(0x08);
+    printf("  Status after reset: 0x%lX\n", status);
     
     // Run CPU
-    printf("Starting CPU...\n");
+    printf("\nStarting CPU...\n");
     tb.axi_write(0x00, 0x01);  // RUN
     
     // Let CPU run
-    printf("Running for 20 cycles...\n");
-    for (int i = 0; i < 20; i++) {
+    printf("Running for 30 cycles...\n");
+    for (int i = 0; i < 30; i++) {
         tb.tick();
     }
     
@@ -149,12 +157,18 @@ int main(int argc, char** argv) {
     tb.axi_write(0x00, 0x00);  // STOP
     
     // Read results
-    printf("\nReading results...\n");
+    printf("\nResults:\n");
     
+    uint64_t ctrl = tb.axi_read(0x00);
+    status = tb.axi_read(0x08);
     uint64_t pc = tb.axi_read(0x10);
+    uint64_t result = tb.axi_read(0x18);
     uint64_t dmem0 = tb.axi_read(0x2000);
     
+    printf("  CTRL:    0x%lX\n", ctrl);
+    printf("  STATUS:  0x%lX\n", status);
     printf("  PC:      0x%lX\n", pc);
+    printf("  RESULT:  0x%lX\n", result);
     printf("  DMEM[0]: %lu (expected 8)\n", dmem0);
     
     // Verify
