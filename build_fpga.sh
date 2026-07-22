@@ -63,15 +63,13 @@ rm -f pcie_ed.qsf pcie_ed.qpf
 
 # Step 5: Generate Qsys system
 echo "[Step 5/7] Running qsys-script..."
-if ! qsys-script --script=pcie_ed.tcl --export pcie_ed.qsys; then
-  echo "Error: qsys-script failed"
-  exit 1
-fi
-
+qsys-script --script=pcie_ed.tcl --export pcie_ed.qsys
+# qsys-script may return non-zero for warnings, check if output file exists
 if [ ! -f pcie_ed.qsys ]; then
   echo "Error: pcie_ed.qsys was not generated"
   exit 1
 fi
+echo "  -> pcie_ed.qsys generated successfully"
 
 # Step 6: Generate Verilog
 echo "[Step 6/7] Running qsys-generate..."
