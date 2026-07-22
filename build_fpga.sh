@@ -31,12 +31,12 @@ echo "[Step 1/7] Setting up build directory..."
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 
-# Step 2: Copy FPGA files
+# Step 2: Copy FPGA files (except .qsf - copied later after qsys-generate)
 echo "[Step 2/7] Copying FPGA files..."
 cp "${SCRIPT_DIR}"/fpga/*.sv "${BUILD_DIR}/" 2>/dev/null || true
 cp "${SCRIPT_DIR}"/fpga/*.tcl "${BUILD_DIR}/"
 cp "${SCRIPT_DIR}"/fpga/*.sdc.terp "${BUILD_DIR}/" 2>/dev/null || true
-cp "${SCRIPT_DIR}"/fpga/pcie_ed.qsf "${BUILD_DIR}/"
+# NOTE: pcie_ed.qsf is copied AFTER qsys-generate, not here
 
 # Step 3: Copy source files
 echo "[Step 3/7] Copying source files..."
@@ -57,9 +57,6 @@ if grep -q "__REVID__" pcie_ed.tcl; then
   echo "Error: Failed to substitute __REVID__ in pcie_ed.tcl"
   exit 1
 fi
-
-# Remove .qsf before qsys-script (it will create its own, we replace it later)
-rm -f pcie_ed.qsf pcie_ed.qpf
 
 # Step 5: Generate Qsys system
 echo "[Step 5/7] Running qsys-script..."
