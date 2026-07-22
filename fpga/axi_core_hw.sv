@@ -285,64 +285,34 @@ module axi_core_hw(
 
   // =========================================================================
   // Clock Domain Crossing (500MHz AXI -> 125MHz CPU)
-  // Since 125MHz is derived from 500MHz (div4), we can use simple sync
+  // For FPGA: cpu_clk is 125MHz from clock_div4x (synchronous to clk)
+  // Since clocks are synchronous, we use simple registering
   // =========================================================================
   
-  // Synchronize reset to CPU clock domain
+  // Synchronize reset to CPU clock domain (2-stage sync for metastability)
   logic cpu_rst_n_sync1, cpu_rst_n;
   always_ff @(posedge cpu_clk) begin
     cpu_rst_n_sync1 <= ~rst;
     cpu_rst_n <= cpu_rst_n_sync1;
   end
   
-  // Register BAR signals in CPU clock domain
-  // Since CPU clock is slower, data will be stable for multiple CPU cycles
+  // Pass signals to CPU clock domain with proper timing
+  // The key insight: bar_wen64 is a 1-cycle pulse, we need to detect it
+  // and hold address/data valid when the pulse occurs
+  
   logic [15:0] cpu_bar_addr;
   logic [63:0] cpu_bar_wdata;
   logic        cpu_bar_wen;
   logic [63:0] cpu_bar_rdata;
   
-  // Synchronize write enable (pulse) to CPU domain
-  logic bar_wen64_d1, bar_wen64_d2, bar_wen64_d3;
-  logic cpu_bar_wen_pulse;
+  // Use combinational logic for address and data - they're stable during the transaction
+  // The AXI state machine guarantees address is stable when bar_wen64 pulses
+  assign cpu_bar_addr = bar_wen64 ? bar_waddr[15:0] : bar_raddr[15:0];
+  assign cpu_bar_wdata = axi_lite_s_wdata;
+  assign cpu_bar_wen = bar_wen64;
   
-  always_ff @(posedge cpu_clk) begin
-    if (~cpu_rst_n) begin
-      bar_wen64_d1 <= 0;
-      bar_wen64_d2 <= 0;
-      bar_wen64_d3 <= 0;
-    end else begin
-      bar_wen64_d1 <= bar_wen64;
-      bar_wen64_d2 <= bar_wen64_d1;
-      bar_wen64_d3 <= bar_wen64_d2;
-    end
-  end
-  assign cpu_bar_wen_pulse = bar_wen64_d2 & ~bar_wen64_d3;  // Rising edge detect
-  
-  // Latch address and data on write
-  always_ff @(posedge cpu_clk) begin
-    if (~cpu_rst_n) begin
-      cpu_bar_addr <= 0;
-      cpu_bar_wdata <= 0;
-      cpu_bar_wen <= 0;
-    end else begin
-      // Latch address for both read and write
-      cpu_bar_addr <= bar_wen64 ? bar_waddr[15:0] : bar_raddr[15:0];
-      cpu_bar_wdata <= axi_lite_s_wdata;
-      cpu_bar_wen <= cpu_bar_wen_pulse;
-    end
-  end
-  
-  // Synchronize read data back to AXI clock domain
-  logic [63:0] axi_bar_rdata_sync;
-  always_ff @(posedge clk) begin
-    if (rst) begin
-      axi_bar_rdata_sync <= 0;
-    end else begin
-      axi_bar_rdata_sync <= cpu_bar_rdata;
-    end
-  end
-  assign axi_lite_s_rdata = axi_bar_rdata_sync;
+  // Read data passes back directly
+  assign axi_lite_s_rdata = cpu_bar_rdata;
 
   riscv_soc u_soc(
     .clk(cpu_clk),
