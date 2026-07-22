@@ -8077,6 +8077,11 @@ proc do_create_pcie_ed {} {
 	set_connection_parameter_value pcie_ss_DUT.coreclkout_hip_toapp/axi_core_hw_1.clock clockRateSysInfo {-1.0}
 	set_connection_parameter_value pcie_ss_DUT.coreclkout_hip_toapp/axi_core_hw_1.clock clockResetSysInfo {}
 	set_connection_parameter_value pcie_ss_DUT.coreclkout_hip_toapp/axi_core_hw_1.clock resetDomainSysInfo {-1}
+	add_connection clk_div_inst.clock_div4x/axi_core_hw_1.cpu_clock
+	set_connection_parameter_value clk_div_inst.clock_div4x/axi_core_hw_1.cpu_clock clockDomainSysInfo {-1}
+	set_connection_parameter_value clk_div_inst.clock_div4x/axi_core_hw_1.cpu_clock clockRateSysInfo {-1.0}
+	set_connection_parameter_value clk_div_inst.clock_div4x/axi_core_hw_1.cpu_clock clockResetSysInfo {}
+	set_connection_parameter_value clk_div_inst.clock_div4x/axi_core_hw_1.cpu_clock resetDomainSysInfo {-1}
 	add_connection pcie_ss_DUT.coreclkout_hip_toapp/clk_div_inst.inclk
 	set_connection_parameter_value pcie_ss_DUT.coreclkout_hip_toapp/clk_div_inst.inclk clockDomainSysInfo {-1}
 	set_connection_parameter_value pcie_ss_DUT.coreclkout_hip_toapp/clk_div_inst.inclk clockRateSysInfo {-1.0}

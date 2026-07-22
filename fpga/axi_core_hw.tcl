@@ -66,6 +66,10 @@ add_interface clock clock end
 set_interface_property clock ENABLED true
 add_interface_port clock clk clk Input 1
 
+add_interface cpu_clock clock end
+set_interface_property cpu_clock ENABLED true
+add_interface_port cpu_clock cpu_clk clk Input 1
+
 add_interface reset reset end
 set_interface_property reset associatedClock clock
 set_interface_property reset synchronousEdges DEASSERT
