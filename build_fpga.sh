@@ -25,63 +25,36 @@ echo "Revision ID: ${revid}"
 echo "Build dir: ${BUILD_DIR}"
 echo "=========================================="
 
-# Step 1: Setup build directory
+# Step 1: Setup build directory and copy RTL files
 echo ""
-echo "[Step 1/7] Setting up build directory..."
+echo "[Step 1/4] Setting up build directory..."
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
-
-# Step 2: Copy FPGA files (except .qsf - copied later after qsys-generate)
-echo "[Step 2/7] Copying FPGA files..."
-cp "${SCRIPT_DIR}"/fpga/*.sv "${BUILD_DIR}/" 2>/dev/null || true
-cp "${SCRIPT_DIR}"/fpga/*.tcl "${BUILD_DIR}/"
-cp "${SCRIPT_DIR}"/fpga/*.sdc.terp "${BUILD_DIR}/" 2>/dev/null || true
-# NOTE: pcie_ed.qsf is copied AFTER qsys-generate, not here
-
-# Step 3: Copy source files
-echo "[Step 3/7] Copying source files..."
-for f in alu.sv regfile.sv decoder.sv riscv_soc.sv; do
-  if [ -f "${SCRIPT_DIR}/src/${f}" ]; then
-    cp "${SCRIPT_DIR}/src/${f}" "${BUILD_DIR}/"
-  else
-    echo "Warning: ${f} not found in src/"
-  fi
-done
+cp "${SCRIPT_DIR}"/rtl/* "${BUILD_DIR}/"
 
 cd "${BUILD_DIR}"
 
-# Step 4: Configure revision ID
-echo "[Step 4/7] Configuring revision ID..."
+# Step 2: Configure and generate
+echo "[Step 2/4] Generating Qsys..."
+rm -f pcie_ed.qsf
 sed -i "s/__REVID__/${revid}/" pcie_ed.tcl
-if grep -q "__REVID__" pcie_ed.tcl; then
-  echo "Error: Failed to substitute __REVID__ in pcie_ed.tcl"
-  exit 1
-fi
-
-# Step 5: Generate Qsys system
-echo "[Step 5/7] Running qsys-script..."
 qsys-script --script=pcie_ed.tcl --export pcie_ed.qsys
-# qsys-script may return non-zero for warnings, check if output file exists
 if [ ! -f pcie_ed.qsys ]; then
   echo "Error: pcie_ed.qsys was not generated"
   exit 1
 fi
-echo "  -> pcie_ed.qsys generated successfully"
 
-# Step 6: Generate Verilog
-echo "[Step 6/7] Running qsys-generate..."
+echo "[Step 3/4] Generating Verilog..."
 qsys-generate pcie_ed.qsys --synthesis=VERILOG
-# qsys-generate may return non-zero for warnings, check if IP files were generated
 if [ ! -d "ip/pcie_ed" ]; then
-  echo "Error: qsys-generate failed - no IP directory created"
+  echo "Error: qsys-generate failed"
   exit 1
 fi
-echo "  -> Verilog generated successfully"
 
-# Step 7: Quartus compile
-echo "[Step 7/7] Running Quartus compilation (this may take 30+ minutes)..."
+# Step 4: Quartus compile
+echo "[Step 4/4] Running Quartus compilation..."
 rm -f pcie_ed.qsf
-cp "${SCRIPT_DIR}/fpga/pcie_ed.qsf" pcie_ed.qsf
+cp "${SCRIPT_DIR}/rtl/pcie_ed.qsf" pcie_ed.qsf
 
 if ! quartus_sh --flow compile pcie_ed; then
   echo "Error: Quartus compilation failed"
@@ -89,19 +62,8 @@ if ! quartus_sh --flow compile pcie_ed; then
 fi
 
 # Package output
-echo ""
-echo "=========================================="
-echo "Build successful! Packaging output..."
-echo "=========================================="
-
 gitdesc=$(git -C "${SCRIPT_DIR}" describe --dirty --always --abbrev=7 2>/dev/null || echo "unknown")
 output=output_files/pcie_ed.sof
-
-if [ ! -f "${output}" ]; then
-  echo "Error: Output file ${output} not found"
-  exit 1
-fi
-
 md5=$(md5sum "${output}" | cut -d ' ' -f1)
 final="riscv-soc-revid-${revid}-git-${gitdesc}-md5-${md5}.sof"
 cp "${output}" "${final}"
