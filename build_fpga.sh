@@ -52,12 +52,14 @@ cd "${BUILD_DIR}"
 
 # Step 4: Configure revision ID
 echo "[Step 4/7] Configuring revision ID..."
-rm -f pcie_ed.qsf.bak
 sed -i "s/__REVID__/${revid}/" pcie_ed.tcl
 if grep -q "__REVID__" pcie_ed.tcl; then
   echo "Error: Failed to substitute __REVID__ in pcie_ed.tcl"
   exit 1
 fi
+
+# Remove .qsf before qsys-script (it will create its own, we replace it later)
+rm -f pcie_ed.qsf pcie_ed.qpf
 
 # Step 5: Generate Qsys system
 echo "[Step 5/7] Running qsys-script..."
