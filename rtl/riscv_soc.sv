@@ -1,5 +1,9 @@
 // RISC-V SoC with PCIe BAR interface
 //
+// 2-Stage Pipeline:
+//   Stage 1 (IF/ID): Fetch instruction, Decode, Read registers
+//   Stage 2 (EX/WB): Execute ALU, Memory access, Write back
+//
 // Memory Map (BAR0):
 //   0x0000-0x00FF: Control registers
 //   0x1000-0x1FFF: IMEM (4KB, 1024 instructions)
@@ -10,13 +14,6 @@
 //   0x08: STATUS  [0] RUNNING, [1] HALTED
 //   0x10: PC      Current program counter (read-only)
 //   0x18: RESULT  CPU result output (read-only)
-//
-// Usage:
-//   1. Host writes program to 0x1000+ (IMEM)
-//   2. Host writes data to 0x2000+ (DMEM) 
-//   3. Host sets CTRL[1]=1 (RESET), then CTRL[0]=1 (RUN)
-//   4. CPU executes program
-//   5. Host reads results from DMEM
 //
 module riscv_soc (
     input  logic        clk,
@@ -62,9 +59,11 @@ module riscv_soc (
         end
     end
     
-    // CPU read from IMEM
-    logic [31:0] cpu_instr;
-    assign cpu_instr = imem[cpu_pc[11:2]];
+    // CPU read from IMEM (registered for timing)
+    logic [31:0] cpu_instr_fetched;
+    always_ff @(posedge clk) begin
+        cpu_instr_fetched <= imem[cpu_pc[11:2]];
+    end
     
     // Host read from IMEM
     always_ff @(posedge clk) begin
@@ -94,11 +93,10 @@ module riscv_soc (
     
     // Host write to DMEM (64-bit writes, lower 32 bits used)
     // CPU write to DMEM
-    // Host uses BAR offset 0x2000+, CPU uses address directly
     logic [10:0] host_dmem_idx;
     logic [10:0] cpu_dmem_idx;
     
-    assign host_dmem_idx = bar_addr[12:2];  // 0x2000 → bit 13 is 1, we use [12:2]
+    assign host_dmem_idx = bar_addr[12:2];
     assign cpu_dmem_idx = cpu_dmem_addr[12:2];
     
     always_ff @(posedge clk) begin
@@ -111,8 +109,8 @@ module riscv_soc (
         end
     end
     
-    // CPU read from DMEM (combinational)
-    assign cpu_dmem_rdata = cpu_dmem_re ? dmem[cpu_dmem_idx] : 32'b0;
+    // CPU read from DMEM (combinational for now)
+    assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
     // Host read from DMEM
     always_ff @(posedge clk) begin
@@ -171,94 +169,160 @@ module riscv_soc (
     end
     
     // =========================================================================
-    // RISC-V CPU Core (Single-cycle with registered outputs for timing)
+    // 2-Stage Pipeline RISC-V CPU
+    // 
+    // Stage 1 (IF/ID): Fetch, Decode, Register Read
+    // Stage 2 (EX/WB): Execute, Memory, Write Back
+    //
+    // Pipeline register sits between Stage 1 and Stage 2
     // =========================================================================
     
-    // CPU internal signals
-    logic [31:0] cpu_rs1_data, cpu_rs2_data;
-    logic [31:0] cpu_imm;
-    logic [31:0] cpu_alu_result;
-    logic        cpu_alu_zero;
-    logic [31:0] cpu_alu_b;
-    logic [31:0] cpu_rd_data;
+    // ---------- Stage 1: Fetch + Decode ----------
     
-    // Decoder outputs
-    logic [4:0]  cpu_rs1, cpu_rs2, cpu_rd;
-    logic [2:0]  cpu_alu_op;
-    logic        cpu_reg_write;
-    logic        cpu_alu_src;
-    logic        cpu_mem_read;
-    logic        cpu_mem_write;
-    logic        cpu_branch;
+    // Decoder outputs (Stage 1 - combinational from fetched instruction)
+    logic [4:0]  s1_rs1, s1_rs2, s1_rd;
+    logic [31:0] s1_imm;
+    logic [2:0]  s1_alu_op;
+    logic        s1_reg_write;
+    logic        s1_alu_src;
+    logic        s1_mem_read;
+    logic        s1_mem_write;
+    logic        s1_branch;
     
-    // Branch logic
-    logic        cpu_take_branch;
-    logic [31:0] cpu_branch_addr;
+    // Decoder instance
+    decoder decoder_inst (
+        .instr(cpu_instr_fetched),
+        .rs1(s1_rs1),
+        .rs2(s1_rs2),
+        .rd(s1_rd),
+        .imm(s1_imm),
+        .alu_op(s1_alu_op),
+        .reg_write(s1_reg_write),
+        .alu_src(s1_alu_src),
+        .mem_read(s1_mem_read),
+        .mem_write(s1_mem_write),
+        .branch(s1_branch)
+    );
     
-    assign cpu_take_branch = cpu_branch & cpu_alu_zero;
-    assign cpu_branch_addr = cpu_pc + cpu_imm;
+    // Register File read (Stage 1)
+    logic [31:0] s1_rs1_data, s1_rs2_data;
+    logic [31:0] s2_rd_data;  // Write data from Stage 2
+    logic        s2_reg_write; // Write enable from Stage 2
+    logic [4:0]  s2_rd;        // Dest register from Stage 2
     
-    // Program Counter
+    regfile regfile_inst (
+        .clk(clk),
+        .we(s2_reg_write & cpu_running),
+        .rs1_addr(s1_rs1),
+        .rs2_addr(s1_rs2),
+        .rd_addr(s2_rd),
+        .rd_data(s2_rd_data),
+        .rs1_data(s1_rs1_data),
+        .rs2_data(s1_rs2_data)
+    );
+    
+    // Stage 1 PC (for branch calculation)
+    logic [31:0] s1_pc;
+    
+    // ---------- Pipeline Register (IF/ID → EX/WB) ----------
+    
+    logic [31:0] s2_pc;
+    logic [31:0] s2_rs1_data, s2_rs2_data;
+    logic [31:0] s2_imm;
+    logic [2:0]  s2_alu_op;
+    logic        s2_alu_src;
+    logic        s2_mem_read;
+    logic        s2_mem_write;
+    logic        s2_branch;
+    logic        s2_valid;  // Pipeline valid bit
+    
+    // Data forwarding: if Stage 2 writes to a reg that Stage 1 reads, forward it
+    logic [31:0] s1_rs1_fwd, s1_rs2_fwd;
+    logic        fwd_rs1, fwd_rs2;
+    
+    assign fwd_rs1 = s2_reg_write && (s2_rd != 0) && (s2_rd == s1_rs1);
+    assign fwd_rs2 = s2_reg_write && (s2_rd != 0) && (s2_rd == s1_rs2);
+    assign s1_rs1_fwd = fwd_rs1 ? s2_rd_data : s1_rs1_data;
+    assign s1_rs2_fwd = fwd_rs2 ? s2_rd_data : s1_rs2_data;
+    
+    // Pipeline register update
     always_ff @(posedge clk) begin
         if (cpu_rst) begin
-            cpu_pc <= 32'b0;
+            s2_valid <= 0;
+            s2_reg_write <= 0;
+            s2_mem_write <= 0;
+            s2_branch <= 0;
         end else if (cpu_running) begin
-            if (cpu_take_branch)
-                cpu_pc <= cpu_branch_addr;
-            else
-                cpu_pc <= cpu_pc + 4;
+            // Pass values to Stage 2
+            s2_pc <= s1_pc;
+            s2_rs1_data <= s1_rs1_fwd;
+            s2_rs2_data <= s1_rs2_fwd;
+            s2_imm <= s1_imm;
+            s2_alu_op <= s1_alu_op;
+            s2_rd <= s1_rd;
+            s2_reg_write <= s1_reg_write;
+            s2_alu_src <= s1_alu_src;
+            s2_mem_read <= s1_mem_read;
+            s2_mem_write <= s1_mem_write;
+            s2_branch <= s1_branch;
+            s2_valid <= 1;
         end
     end
     
-    // Decoder
-    decoder decoder_inst (
-        .instr(cpu_instr),
-        .rs1(cpu_rs1),
-        .rs2(cpu_rs2),
-        .rd(cpu_rd),
-        .imm(cpu_imm),
-        .alu_op(cpu_alu_op),
-        .reg_write(cpu_reg_write),
-        .alu_src(cpu_alu_src),
-        .mem_read(cpu_mem_read),
-        .mem_write(cpu_mem_write),
-        .branch(cpu_branch)
-    );
-    
-    // Register File
-    regfile regfile_inst (
-        .clk(clk),
-        .we(cpu_reg_write & cpu_running),
-        .rs1_addr(cpu_rs1),
-        .rs2_addr(cpu_rs2),
-        .rd_addr(cpu_rd),
-        .rd_data(cpu_rd_data),
-        .rs1_data(cpu_rs1_data),
-        .rs2_data(cpu_rs2_data)
-    );
+    // ---------- Stage 2: Execute + Write Back ----------
     
     // ALU input mux
-    assign cpu_alu_b = cpu_alu_src ? cpu_imm : cpu_rs2_data;
+    logic [31:0] s2_alu_b;
+    assign s2_alu_b = s2_alu_src ? s2_imm : s2_rs2_data;
     
     // ALU
+    logic [31:0] s2_alu_result;
+    logic        s2_alu_zero;
+    
     alu alu_inst (
-        .a(cpu_rs1_data),
-        .b(cpu_alu_b),
-        .op(cpu_alu_op),
-        .result(cpu_alu_result),
-        .zero(cpu_alu_zero)
+        .a(s2_rs1_data),
+        .b(s2_alu_b),
+        .op(s2_alu_op),
+        .result(s2_alu_result),
+        .zero(s2_alu_zero)
     );
     
+    // Branch logic
+    logic        s2_take_branch;
+    logic [31:0] s2_branch_addr;
+    
+    assign s2_take_branch = s2_branch & s2_alu_zero & s2_valid;
+    assign s2_branch_addr = s2_pc + s2_imm;
+    
     // DMEM interface
-    assign cpu_dmem_addr = cpu_alu_result;
-    assign cpu_dmem_wdata = cpu_rs2_data;
-    assign cpu_dmem_we = cpu_mem_write;
-    assign cpu_dmem_re = cpu_mem_read;
+    assign cpu_dmem_addr = s2_alu_result;
+    assign cpu_dmem_wdata = s2_rs2_data;
+    assign cpu_dmem_we = s2_mem_write & s2_valid;
+    assign cpu_dmem_re = s2_mem_read & s2_valid;
     
     // Write-back mux
-    assign cpu_rd_data = cpu_mem_read ? cpu_dmem_rdata : cpu_alu_result;
+    assign s2_rd_data = s2_mem_read ? cpu_dmem_rdata : s2_alu_result;
+    
+    // ---------- Program Counter ----------
+    
+    always_ff @(posedge clk) begin
+        if (cpu_rst) begin
+            cpu_pc <= 32'b0;
+            s1_pc <= 32'b0;
+        end else if (cpu_running) begin
+            // Save current PC for Stage 1 (used by branches in Stage 2)
+            s1_pc <= cpu_pc;
+            
+            // Next PC logic
+            if (s2_take_branch) begin
+                cpu_pc <= s2_branch_addr;
+            end else begin
+                cpu_pc <= cpu_pc + 4;
+            end
+        end
+    end
     
     // Debug output
-    assign cpu_result = cpu_rd_data;
+    assign cpu_result = s2_rd_data;
 
 endmodule
