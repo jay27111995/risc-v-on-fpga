@@ -3870,6 +3870,11 @@ proc do_create_pcie_ed {} {
 	set_instantiation_interface_parameter_value clock externallyDriven {false}
 	set_instantiation_interface_parameter_value clock ptfSchematicName {}
 	add_instantiation_interface_port clock clk clk 1 STD_LOGIC Input
+	add_instantiation_interface cpu_clock clock INPUT
+	set_instantiation_interface_parameter_value cpu_clock clockRate {0}
+	set_instantiation_interface_parameter_value cpu_clock externallyDriven {false}
+	set_instantiation_interface_parameter_value cpu_clock ptfSchematicName {}
+	add_instantiation_interface_port cpu_clock cpu_clk clk 1 STD_LOGIC Input
 	add_instantiation_interface reset reset INPUT
 	set_instantiation_interface_parameter_value reset associatedClock {clock}
 	set_instantiation_interface_parameter_value reset synchronousEdges {DEASSERT}

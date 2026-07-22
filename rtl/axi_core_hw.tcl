@@ -67,6 +67,7 @@ set_interface_property clock ENABLED true
 add_interface_port clock clk clk Input 1
 
 add_interface cpu_clock clock end
+set_interface_property cpu_clock clockRate 0
 set_interface_property cpu_clock ENABLED true
 add_interface_port cpu_clock cpu_clk clk Input 1
 
