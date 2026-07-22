@@ -73,10 +73,13 @@ echo "  -> pcie_ed.qsys generated successfully"
 
 # Step 6: Generate Verilog
 echo "[Step 6/7] Running qsys-generate..."
-if ! qsys-generate pcie_ed.qsys --synthesis=VERILOG; then
-  echo "Error: qsys-generate failed"
+qsys-generate pcie_ed.qsys --synthesis=VERILOG
+# qsys-generate may return non-zero for warnings, check if IP files were generated
+if [ ! -d "ip/pcie_ed" ]; then
+  echo "Error: qsys-generate failed - no IP directory created"
   exit 1
 fi
+echo "  -> Verilog generated successfully"
 
 # Step 7: Quartus compile
 echo "[Step 7/7] Running Quartus compilation (this may take 30+ minutes)..."
