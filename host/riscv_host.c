@@ -67,49 +67,20 @@ uint32_t cpu_get_pc(void) {
     return read32(BAR_PC);
 }
 
-// Memory access - write pairs of 32-bit words as 64-bit
-// Low word at even index, high word at odd index
-void write_imem_pair(uint32_t even_idx, uint32_t instr_even, uint32_t instr_odd) {
-    uint32_t offset = BAR_IMEM + even_idx * 4;
-    uint64_t val = ((uint64_t)instr_odd << 32) | instr_even;
-    write64(offset, val);
-}
-
+// Memory access - SoC only uses lower 32 bits of 64-bit write
 void write_imem(uint32_t word_idx, uint32_t instr) {
-    // For single writes, we need to preserve the other word
-    // But since we can't read it back properly, just write the pair
-    // Caller should use write_imem_pair when possible
-    uint32_t offset = BAR_IMEM + (word_idx & ~1) * 4;
-    uint64_t val;
-    if (word_idx & 1) {
-        val = (uint64_t)instr << 32;  // Upper word, lower is 0 (NOP)
-    } else {
-        val = instr;  // Lower word, upper is 0 (NOP)
-    }
-    write64(offset, val);
+    uint32_t offset = BAR_IMEM + word_idx * 4;
+    write64(offset, instr);  // Upper 32 bits ignored by SoC
 }
 
 uint32_t read_imem(uint32_t word_idx) {
-    // Only lower 32 bits are returned, so odd indices won't work
     uint32_t offset = BAR_IMEM + word_idx * 4;
     return (uint32_t)read64(offset);
 }
 
-void write_dmem_pair(uint32_t even_idx, uint32_t data_even, uint32_t data_odd) {
-    uint32_t offset = BAR_DMEM + even_idx * 4;
-    uint64_t val = ((uint64_t)data_odd << 32) | data_even;
-    write64(offset, val);
-}
-
 void write_dmem(uint32_t word_idx, uint32_t data) {
-    uint32_t offset = BAR_DMEM + (word_idx & ~1) * 4;
-    uint64_t val;
-    if (word_idx & 1) {
-        val = (uint64_t)data << 32;
-    } else {
-        val = data;
-    }
-    write64(offset, val);
+    uint32_t offset = BAR_DMEM + word_idx * 4;
+    write64(offset, data);
 }
 
 uint32_t read_dmem(uint32_t word_idx) {
@@ -120,13 +91,8 @@ uint32_t read_dmem(uint32_t word_idx) {
 void load_program(const uint32_t *program, size_t count) {
     size_t i;
     printf("Loading %zu instructions...\n", count);
-    // Write pairs of instructions for proper 64-bit alignment
-    for (i = 0; i + 1 < count; i += 2) {
-        write_imem_pair(i, program[i], program[i + 1]);
-    }
-    // Handle odd last instruction (if any)
-    if (i < count) {
-        write_imem_pair(i, program[i], 0x00000013);  // NOP for padding
+    for (i = 0; i < count; i++) {
+        write_imem(i, program[i]);
     }
 }
 
