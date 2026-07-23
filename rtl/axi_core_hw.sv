@@ -183,8 +183,16 @@ module axi_core_hw(
   assign wburst_rsp_valid = axm_m0_bready & axm_m0_bvalid;
   assign wburst_rsp_id = axm_m0_bid;
 
+  // =========================================================================
+  // AXI-Lite Slave - Read Channel
+  // =========================================================================
   //
-  // AXI Lite Slave - Read Channel
+  // Read State Machine:
+  //   R_S0: Idle, wait for arvalid
+  //   R_S1: Assert arready, capture address
+  //   R_S2: Wait one cycle for SoC to register read data
+  //   R_S3: Assert rvalid, return data
+  //   R_S4: Done, return to idle
   //
 
   typedef enum {R_S0, R_S1, R_S2, R_S3, R_S4} r_state_t;
@@ -200,38 +208,37 @@ module axi_core_hw(
     axi_lite_s_arready = 0;
     axi_lite_s_rvalid = 0;
     case (r_state)
-      R_S0: begin
-        if (axi_lite_s_arvalid) next_r_state = R_S1;
-      end
+      R_S0: if (axi_lite_s_arvalid) next_r_state = R_S1;
       R_S1: begin
         axi_lite_s_arready = 1;
         next_r_state = R_S2;
       end
-      R_S2: begin
-        next_r_state = R_S3;
-      end
+      R_S2: next_r_state = R_S3;
       R_S3: begin
         axi_lite_s_rvalid = 1;
-        if (axi_lite_s_rready) begin
-          next_r_state = R_S4;
-        end
+        if (axi_lite_s_rready) next_r_state = R_S4;
       end
-      R_S4: begin
-          next_r_state = R_S0;
-      end
+      R_S4: next_r_state = R_S0;
     endcase
   end
 
+  // Capture read address when arvalid first seen
   logic [21:0] bar_raddr;
   always_ff @(posedge clk) begin
-    // Capture address when arvalid first asserted (entering R_S1)
     if (r_state == R_S0 && axi_lite_s_arvalid) begin
       bar_raddr <= axi_lite_s_araddr[21:0];
     end
   end
 
+  // =========================================================================
+  // AXI-Lite Slave - Write Channel  
+  // =========================================================================
   //
-  // AXI Lite Slave - Write Channel
+  // Write State Machine:
+  //   W_S0: Idle, wait for awvalid && wvalid
+  //   W_S1: Assert awready/wready, capture address/data
+  //   W_S2: Assert bvalid, perform write to SoC
+  //   W_S3: Done, return to idle
   //
 
   typedef enum {W_S0, W_S1, W_S2, W_S3} w_state_t;
@@ -248,9 +255,7 @@ module axi_core_hw(
     axi_lite_s_wready = 0;
     axi_lite_s_bvalid = 0;
     case (w_state)
-      W_S0: begin
-        if (axi_lite_s_awvalid & axi_lite_s_wvalid) next_w_state = W_S1;
-      end
+      W_S0: if (axi_lite_s_awvalid && axi_lite_s_wvalid) next_w_state = W_S1;
       W_S1: begin
         axi_lite_s_awready = 1;
         axi_lite_s_wready = 1;
@@ -258,37 +263,36 @@ module axi_core_hw(
       end
       W_S2: begin
         axi_lite_s_bvalid = 1;
-        if (axi_lite_s_bready) begin
-          next_w_state = W_S3;
-        end
+        if (axi_lite_s_bready) next_w_state = W_S3;
       end
-      W_S3: begin
-          next_w_state = W_S0;
-      end
+      W_S3: next_w_state = W_S0;
     endcase
   end
 
-  // Write enable - delayed by one cycle so captured address/data are valid
-  logic bar_wen_pre;
-  logic bar_wen;
-  assign bar_wen_pre = next_w_state == W_S2 && w_state != next_w_state && axi_lite_s_wstrb != 8'h00;
-  
-  always_ff @(posedge clk) begin
-    if (rst) bar_wen <= 1'b0;
-    else bar_wen <= bar_wen_pre;
-  end
-  
-  // Capture address and data when we accept the transaction (W_S1)
+  // Capture address, data, and strobe validity when transaction accepted (W_S1)
   logic [21:0] bar_waddr;
   logic [63:0] bar_wdata_captured;
+  logic        bar_wstrb_valid;
+  
   always_ff @(posedge clk) begin
-    if (w_state == W_S1) begin
+    if (rst) begin
+      bar_wstrb_valid <= 1'b0;
+    end else if (w_state == W_S1) begin
       bar_waddr <= axi_lite_s_awaddr[21:0];
       bar_wdata_captured <= axi_lite_s_wdata;
+      bar_wstrb_valid <= (axi_lite_s_wstrb != 8'h00);
+    end else begin
+      bar_wstrb_valid <= 1'b0;
     end
   end
+  
+  // Write enable: one-cycle pulse in W_S2 when data is valid
+  wire bar_wen = (w_state == W_S2) && bar_wstrb_valid;
 
-  // Stub the DMA burst signals (not used by RISC-V SoC)
+  // =========================================================================
+  // DMA Burst Interface (unused, directly tied off)
+  // =========================================================================
+  
   assign rburst_req_valid = 0;
   assign rburst_req_id = 0;
   assign rburst_req_addr = 0;
@@ -303,13 +307,16 @@ module axi_core_hw(
   // RISC-V SoC Instance
   // =========================================================================
   
-  // Read enable: assert during R_S2 to capture read data from SoC
+  // Read enable: asserted in R_S2 when SoC should capture read data
   wire bar_ren = (r_state == R_S2);
+  
+  // Address mux: use write address during write, read address otherwise
+  wire [15:0] bar_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
   
   riscv_soc u_soc(
     .clk(clk),
     .rst_n(~rst),
-    .bar_addr(bar_wen ? bar_waddr[15:0] : bar_raddr[15:0]),
+    .bar_addr(bar_addr),
     .bar_wdata(bar_wdata_captured),
     .bar_wen(bar_wen),
     .bar_ren(bar_ren),
