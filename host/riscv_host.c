@@ -60,7 +60,7 @@ uint32_t cpu_get_pc(void) {
 // Memory access
 void write_imem(uint32_t word_idx, uint32_t instr) {
     write32(BAR_IMEM + word_idx * 4, instr);
-    usleep(1);  // Small delay for CDC to complete
+    usleep(100);  // 100us delay for CDC to complete
 }
 
 void write_dmem(uint32_t word_idx, uint32_t data) {
