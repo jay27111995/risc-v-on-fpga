@@ -1,8 +1,9 @@
 // RISC-V SoC with PCIe BAR interface
 //
-// 2-Stage Pipeline:
+// 3-Stage Pipeline:
 //   Stage 1 (IF/ID): Fetch instruction, Decode, Read registers
-//   Stage 2 (EX/WB): Execute ALU, Memory access, Write back
+//   Stage 2 (EX):    Execute ALU, Branch decision
+//   Stage 3 (MEM/WB): Memory access, Write back
 //
 // Memory Map (BAR0):
 //   0x0000-0x00FF: Control registers
@@ -36,29 +37,25 @@ module riscv_soc (
     logic [31:0] cpu_pc;
     logic [31:0] cpu_result;
     
-    // Directly derive reset from ctrl_reset
     logic cpu_rst;
     assign cpu_rst = ~rst_n | ctrl_reset;
-    
-    // CPU running status
     assign cpu_running = ctrl_run & ~ctrl_reset;
     
     // =========================================================================
     // IMEM - Instruction Memory (host writable, CPU readable)
-    // 1024 x 32-bit = 4KB
     // =========================================================================
     
     logic [31:0] imem [0:1023];
     logic [31:0] imem_rdata;
     
-    // Host write to IMEM (64-bit writes, lower 32 bits used)
+    // Host write to IMEM
     always_ff @(posedge clk) begin
         if (bar_wen && bar_addr[15:12] == 4'h1) begin
             imem[bar_addr[11:2]] <= bar_wdata[31:0];
         end
     end
     
-    // CPU read from IMEM (registered for timing)
+    // CPU read from IMEM (registered)
     logic [31:0] cpu_instr_fetched;
     always_ff @(posedge clk) begin
         cpu_instr_fetched <= imem[cpu_pc[11:2]];
@@ -69,7 +66,6 @@ module riscv_soc (
         imem_rdata <= imem[bar_addr[11:2]];
     end
     
-    // Initialize IMEM with NOPs
     initial begin
         for (int i = 0; i < 1024; i++)
             imem[i] = 32'h00000013;  // NOP
@@ -77,21 +73,16 @@ module riscv_soc (
     
     // =========================================================================
     // DMEM - Data Memory (shared between host and CPU)
-    // 2048 x 32-bit = 8KB
     // =========================================================================
     
     logic [31:0] dmem [0:2047];
     logic [31:0] dmem_host_rdata;
     
-    // CPU DMEM interface
     logic [31:0] cpu_dmem_addr;
     logic [31:0] cpu_dmem_wdata;
     logic [31:0] cpu_dmem_rdata;
     logic        cpu_dmem_we;
-    logic        cpu_dmem_re;
     
-    // Host write to DMEM (64-bit writes, lower 32 bits used)
-    // CPU write to DMEM
     logic [10:0] host_dmem_idx;
     logic [10:0] cpu_dmem_idx;
     
@@ -100,23 +91,18 @@ module riscv_soc (
     
     always_ff @(posedge clk) begin
         if (bar_wen && bar_addr[15:13] == 3'b001) begin
-            // Host write to DMEM (0x2000-0x3FFF)
             dmem[host_dmem_idx] <= bar_wdata[31:0];
         end else if (cpu_dmem_we && cpu_running) begin
-            // CPU write
             dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
         end
     end
     
-    // CPU read from DMEM (combinational for now)
     assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
-    // Host read from DMEM
     always_ff @(posedge clk) begin
         dmem_host_rdata <= dmem[host_dmem_idx];
     end
     
-    // Initialize DMEM to zero
     initial begin
         for (int i = 0; i < 2048; i++)
             dmem[i] = 32'b0;
@@ -131,13 +117,11 @@ module riscv_soc (
             ctrl_run <= 0;
             ctrl_reset <= 0;
         end else begin
-            // Self-clearing reset
             if (ctrl_reset)
                 ctrl_reset <= 0;
             
-            // Host write to control registers
             if (bar_wen && bar_addr[15:12] == 4'h0) begin
-                if (bar_addr[7:3] == 5'd0) begin  // CTRL register
+                if (bar_addr[7:3] == 5'd0) begin
                     ctrl_run <= bar_wdata[0];
                     ctrl_reset <= bar_wdata[1];
                 end
@@ -150,35 +134,33 @@ module riscv_soc (
     // =========================================================================
     
     always_comb begin
-        bar_rdata = 64'b0;  // default
+        bar_rdata = 64'b0;
         case (bar_addr[15:12])
-            4'h0: begin  // Control registers
+            4'h0: begin
                 case (bar_addr[7:3])
-                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};  // CTRL
-                    5'd1: bar_rdata = {62'b0, 1'b0, cpu_running};     // STATUS
-                    5'd2: bar_rdata = {32'b0, cpu_pc};                // PC
-                    5'd3: bar_rdata = {32'b0, cpu_result};            // RESULT
+                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};
+                    5'd1: bar_rdata = {62'b0, 1'b0, cpu_running};
+                    5'd2: bar_rdata = {32'b0, cpu_pc};
+                    5'd3: bar_rdata = {32'b0, cpu_result};
                     default: bar_rdata = 64'b0;
                 endcase
             end
-            4'h1: bar_rdata = {32'b0, imem_rdata};  // IMEM
-            4'h2, 4'h3: bar_rdata = {32'b0, dmem_host_rdata};  // DMEM
+            4'h1: bar_rdata = {32'b0, imem_rdata};
+            4'h2, 4'h3: bar_rdata = {32'b0, dmem_host_rdata};
             default: bar_rdata = 64'b0;
         endcase
     end
     
     // =========================================================================
-    // 2-Stage Pipeline RISC-V CPU
+    // 3-Stage Pipeline RISC-V CPU
     // 
     // Stage 1 (IF/ID): Fetch, Decode, Register Read
-    // Stage 2 (EX/WB): Execute, Memory, Write Back
-    //
-    // Pipeline register sits between Stage 1 and Stage 2
+    // Stage 2 (EX):    Execute ALU, Branch decision
+    // Stage 3 (MEM/WB): Memory access, Write back
     // =========================================================================
     
     // ---------- Stage 1: Fetch + Decode ----------
     
-    // Decoder outputs (Stage 1 - combinational from fetched instruction)
     logic [4:0]  s1_rs1, s1_rs2, s1_rd;
     logic [31:0] s1_imm;
     logic [2:0]  s1_alu_op;
@@ -188,7 +170,6 @@ module riscv_soc (
     logic        s1_mem_write;
     logic        s1_branch;
     
-    // Decoder instance
     decoder decoder_inst (
         .instr(cpu_instr_fetched),
         .rs1(s1_rs1),
@@ -203,48 +184,60 @@ module riscv_soc (
         .branch(s1_branch)
     );
     
-    // Register File read (Stage 1)
+    // Register File - writes from Stage 3
     logic [31:0] s1_rs1_data, s1_rs2_data;
-    logic [31:0] s2_rd_data;  // Write data from Stage 2
-    logic        s2_reg_write; // Write enable from Stage 2
-    logic [4:0]  s2_rd;        // Dest register from Stage 2
+    logic [31:0] s3_rd_data;
+    logic        s3_reg_write;
+    logic [4:0]  s3_rd;
     
     regfile regfile_inst (
         .clk(clk),
-        .we(s2_reg_write & cpu_running),
+        .we(s3_reg_write & cpu_running),
         .rs1_addr(s1_rs1),
         .rs2_addr(s1_rs2),
-        .rd_addr(s2_rd),
-        .rd_data(s2_rd_data),
+        .rd_addr(s3_rd),
+        .rd_data(s3_rd_data),
         .rs1_data(s1_rs1_data),
         .rs2_data(s1_rs2_data)
     );
     
-    // Stage 1 PC (for branch calculation)
     logic [31:0] s1_pc;
     
-    // ---------- Pipeline Register (IF/ID → EX/WB) ----------
+    // ---------- Pipeline Register 1 (IF/ID → EX) ----------
     
     logic [31:0] s2_pc;
     logic [31:0] s2_rs1_data, s2_rs2_data;
     logic [31:0] s2_imm;
     logic [2:0]  s2_alu_op;
+    logic [4:0]  s2_rd;
+    logic        s2_reg_write;
     logic        s2_alu_src;
     logic        s2_mem_read;
     logic        s2_mem_write;
     logic        s2_branch;
-    logic        s2_valid;  // Pipeline valid bit
+    logic        s2_valid;
     
-    // Data forwarding: if Stage 2 writes to a reg that Stage 1 reads, forward it
+    // Data forwarding from Stage 2 (EX) and Stage 3 (WB)
+    logic [31:0] s2_alu_result;  // Forward declaration for forwarding
+    
     logic [31:0] s1_rs1_fwd, s1_rs2_fwd;
-    logic        fwd_rs1, fwd_rs2;
+    logic        fwd_s2_rs1, fwd_s2_rs2;
+    logic        fwd_s3_rs1, fwd_s3_rs2;
     
-    assign fwd_rs1 = s2_reg_write && (s2_rd != 0) && (s2_rd == s1_rs1);
-    assign fwd_rs2 = s2_reg_write && (s2_rd != 0) && (s2_rd == s1_rs2);
-    assign s1_rs1_fwd = fwd_rs1 ? s2_rd_data : s1_rs1_data;
-    assign s1_rs2_fwd = fwd_rs2 ? s2_rd_data : s1_rs2_data;
+    // Forward from Stage 2 (ALU result, not yet written)
+    assign fwd_s2_rs1 = s2_reg_write && (s2_rd != 0) && (s2_rd == s1_rs1) && !s2_mem_read;
+    assign fwd_s2_rs2 = s2_reg_write && (s2_rd != 0) && (s2_rd == s1_rs2) && !s2_mem_read;
     
-    // Pipeline register update
+    // Forward from Stage 3 (final write-back value)
+    assign fwd_s3_rs1 = s3_reg_write && (s3_rd != 0) && (s3_rd == s1_rs1) && !fwd_s2_rs1;
+    assign fwd_s3_rs2 = s3_reg_write && (s3_rd != 0) && (s3_rd == s1_rs2) && !fwd_s2_rs2;
+    
+    assign s1_rs1_fwd = fwd_s2_rs1 ? s2_alu_result : 
+                        fwd_s3_rs1 ? s3_rd_data : s1_rs1_data;
+    assign s1_rs2_fwd = fwd_s2_rs2 ? s2_alu_result : 
+                        fwd_s3_rs2 ? s3_rd_data : s1_rs2_data;
+    
+    // Pipeline register 1 update
     always_ff @(posedge clk) begin
         if (cpu_rst) begin
             s2_valid <= 0;
@@ -252,7 +245,6 @@ module riscv_soc (
             s2_mem_write <= 0;
             s2_branch <= 0;
         end else if (cpu_running) begin
-            // Pass values to Stage 2
             s2_pc <= s1_pc;
             s2_rs1_data <= s1_rs1_fwd;
             s2_rs2_data <= s1_rs2_fwd;
@@ -268,15 +260,12 @@ module riscv_soc (
         end
     end
     
-    // ---------- Stage 2: Execute + Write Back ----------
+    // ---------- Stage 2: Execute (ALU only) ----------
     
-    // ALU input mux
     logic [31:0] s2_alu_b;
     assign s2_alu_b = s2_alu_src ? s2_imm : s2_rs2_data;
     
-    // ALU
-    logic [31:0] s2_alu_result;
-    logic        s2_alu_zero;
+    logic s2_alu_zero;
     
     alu alu_inst (
         .a(s2_rs1_data),
@@ -286,21 +275,46 @@ module riscv_soc (
         .zero(s2_alu_zero)
     );
     
-    // Branch logic
+    // Branch decision (happens in Stage 2)
     logic        s2_take_branch;
     logic [31:0] s2_branch_addr;
     
     assign s2_take_branch = s2_branch & s2_alu_zero & s2_valid;
     assign s2_branch_addr = s2_pc + s2_imm;
     
+    // ---------- Pipeline Register 2 (EX → MEM/WB) ----------
+    
+    logic [31:0] s3_alu_result;
+    logic [31:0] s3_rs2_data;
+    logic        s3_mem_read;
+    logic        s3_mem_write;
+    logic        s3_valid;
+    
+    always_ff @(posedge clk) begin
+        if (cpu_rst) begin
+            s3_valid <= 0;
+            s3_reg_write <= 0;
+            s3_mem_write <= 0;
+        end else if (cpu_running) begin
+            s3_alu_result <= s2_alu_result;
+            s3_rs2_data <= s2_rs2_data;
+            s3_rd <= s2_rd;
+            s3_reg_write <= s2_reg_write;
+            s3_mem_read <= s2_mem_read;
+            s3_mem_write <= s2_mem_write;
+            s3_valid <= s2_valid;
+        end
+    end
+    
+    // ---------- Stage 3: Memory + Write Back ----------
+    
     // DMEM interface
-    assign cpu_dmem_addr = s2_alu_result;
-    assign cpu_dmem_wdata = s2_rs2_data;
-    assign cpu_dmem_we = s2_mem_write & s2_valid;
-    assign cpu_dmem_re = s2_mem_read & s2_valid;
+    assign cpu_dmem_addr = s3_alu_result;
+    assign cpu_dmem_wdata = s3_rs2_data;
+    assign cpu_dmem_we = s3_mem_write & s3_valid;
     
     // Write-back mux
-    assign s2_rd_data = s2_mem_read ? cpu_dmem_rdata : s2_alu_result;
+    assign s3_rd_data = s3_mem_read ? cpu_dmem_rdata : s3_alu_result;
     
     // ---------- Program Counter ----------
     
@@ -309,10 +323,8 @@ module riscv_soc (
             cpu_pc <= 32'b0;
             s1_pc <= 32'b0;
         end else if (cpu_running) begin
-            // Save current PC for Stage 1 (used by branches in Stage 2)
             s1_pc <= cpu_pc;
             
-            // Next PC logic
             if (s2_take_branch) begin
                 cpu_pc <= s2_branch_addr;
             end else begin
@@ -322,6 +334,6 @@ module riscv_soc (
     end
     
     // Debug output
-    assign cpu_result = s2_rd_data;
+    assign cpu_result = s3_rd_data;
 
 endmodule

@@ -11,7 +11,6 @@ public:
         soc = new Vriscv_soc;
         soc->rst_n = 0;
         soc->clk = 0;
-        soc->clk_en = 1;  // Always enable for simulation
         soc->bar_wen = 0;
         soc->bar_addr = 0;
         soc->bar_wdata = 0;
