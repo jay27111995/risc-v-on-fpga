@@ -248,7 +248,8 @@ module axi_core_hw(
     axi_lite_s_bvalid = 0;
     case (w_state)
       W_S0: begin
-        if (axi_lite_s_awvalid & axi_lite_s_wvalid) next_w_state = W_S1;
+        // Wait for previous write to complete before accepting new one
+        if (axi_lite_s_awvalid & axi_lite_s_wvalid & ~write_busy) next_w_state = W_S1;
       end
       W_S1: begin
         axi_lite_s_awready = 1;
@@ -291,6 +292,9 @@ module axi_core_hw(
   // we need to stretch the write pulse to be seen by the slower clock.
   // =========================================================================
   
+  // Forward declaration for AXI backpressure
+  logic write_busy;
+  
   // Synchronize reset to CPU clock domain (2-stage sync for metastability)
   logic cpu_rst_n_sync1, cpu_rst_n;
   always_ff @(posedge cpu_clk) begin
@@ -305,7 +309,6 @@ module axi_core_hw(
   logic [3:0] wen_stretch;
   logic [15:0] latched_waddr;
   logic [63:0] latched_wdata;
-  logic write_busy;
   
   assign write_busy = (wen_stretch != 0);
   
