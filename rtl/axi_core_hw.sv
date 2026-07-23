@@ -3,8 +3,8 @@
 `default_nettype none
 
 module axi_core_hw(
-    input  wire          clk,        // 500MHz AXI clock
-    input  wire          cpu_clk,    // 125MHz CPU clock  
+    input  wire          clk,        // 500MHz AXI clock (also used for CPU)
+    input  wire          cpu_clk,    // Unused - kept for PCIe system compatibility
     input  wire          rst,
 
     // AXI Master

@@ -372,8 +372,7 @@ module riscv_soc (
     // =========================================================================
     
     // --- Data Forwarding Logic ---
-    // Forward from MEM stage (ALU results, available immediately)
-    // Forward from MEM and WB stages
+    // Forward from MEM and WB stages to resolve data hazards
     logic [31:0] mem_alu_result;
     logic        mem_reg_write;
     // mem_mem_read, mem_rd declared in forward declarations
