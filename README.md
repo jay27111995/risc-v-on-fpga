@@ -1,25 +1,42 @@
 # RISC-V on FPGA
 
-A simple RISC-V CPU (RV32I subset) with PCIe BAR interface, targeting Intel Agilex 7 FPGA.
+A minimal RISC-V CPU (RV32I subset) with PCIe BAR interface, targeting Intel Agilex 7 FPGA at 500MHz.
 
 ## Architecture
+
+5-stage pipeline designed for 500MHz operation:
+
+```
+┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐
+│ IF  │──▶│ ID  │──▶│ EX  │──▶│ MEM │──▶│ WB  │
+└─────┘   └─────┘   └─────┘   └─────┘   └─────┘
+  │         │         │         │         │
+Fetch    Decode    Execute   Memory    Write
+ IMEM    RegFile    ALU      DMEM     RegFile
+```
+
+**Pipeline Features:**
+- Data forwarding from MEM and WB stages
+- Branch resolution in MEM stage (3-cycle penalty)
+- Registered stall signal for clean timing
+- Load-use hazard detection with early stall prediction
 
 ```
                     PCIe (500MHz)
                       │
-                      ▼
-              ┌───────────────┐
+              ┌───────▼───────┐
               │   PCIe IP     │
               │  (AXI-Lite)   │
               └───────┬───────┘
                       │
               ┌───────▼───────┐
               │ axi_core_hw   │
-              │ (clk divider) │ ◄── 500MHz / 4 = 125MHz for CPU
+              │  (AXI slave)  │
               └───────┬───────┘
                       │ BAR access
               ┌───────▼───────┐
               │  riscv_soc    │
+              │ (5-stage CPU) │
               │               │
               │  ┌─────────┐  │
               │  │  IMEM   │◄─┼── Host writes program
@@ -67,39 +84,41 @@ A simple RISC-V CPU (RV32I subset) with PCIe BAR interface, targeting Intel Agil
 ## Files
 
 ```
-src/
+rtl/
   alu.sv           # Arithmetic Logic Unit
-  regfile.sv       # 32x32-bit Register File  
+  regfile.sv       # 32x32-bit Register File (with write-first bypass)
   decoder.sv       # Instruction Decoder
-  riscv_soc.sv     # SoC with CPU, memories, control regs
-
-fpga/
-  axi_core_hw.sv   # AXI wrapper (connects PCIe to SoC)
-  axi_core_hw.tcl  # Platform Designer component
-  pcie_ed.tcl      # Platform Designer system
-  pcie_ed.qsf      # Quartus pin assignments
+  riscv_soc.sv     # SoC with 5-stage pipelined CPU, memories, control regs
+  axi_core_hw.sv   # AXI-Lite slave wrapper (connects PCIe to SoC)
 
 tb/
-  tb_riscv_soc.cpp # Unit test for SoC
+  tb_riscv_soc.cpp # Direct SoC test (no AXI)
   tb_axi_core.cpp  # Integration test (AXI + SoC)
 
 host/
   riscv_host.c     # VFIO host program
-  build.sh         # Build script with setup instructions
+  build.sh         # Build script
+
+build/
+  build_fpga.sh    # Quartus build script
+  pcie_ed.qsf      # Quartus project settings
 ```
 
 ## Build & Test (Simulation)
 
 ```bash
-# Test SoC
 cd tb
-verilator --cc ../src/*.sv --top-module riscv_soc \
-          --exe tb_riscv_soc.cpp --build -Wno-TIMESCALEMOD -Wno-CASEINCOMPLETE
+
+# Test SoC directly
+verilator --cc --top-module riscv_soc ../rtl/*.sv \
+          --exe tb_riscv_soc.cpp --build \
+          -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL
 ./obj_dir/Vriscv_soc
 
-# Test full FPGA design (AXI + SoC)
-verilator --cc ../src/*.sv ../fpga/axi_core_hw.sv --top-module axi_core_hw \
-          --exe tb_axi_core.cpp --build -Wno-TIMESCALEMOD -Wno-CASEINCOMPLETE
+# Test AXI wrapper + SoC
+verilator --cc --top-module axi_core_hw ../rtl/*.sv \
+          --exe tb_axi_core.cpp --build \
+          -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL
 ./obj_dir/Vaxi_core_hw
 ```
 
@@ -154,7 +173,7 @@ BEQ  x0, x0, 0      # loop forever
 - [x] SoC with BAR interface
 - [x] AXI wrapper for PCIe
 - [x] FPGA build infrastructure
-- [x] Clock divider for timing closure
+- [x] 5-stage pipeline for 500MHz timing
 - [x] VFIO host program
 - [x] Simulation tests
 - [ ] Hardware test on Agilex 7
