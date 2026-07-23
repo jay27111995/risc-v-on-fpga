@@ -299,17 +299,22 @@ module axi_core_hw(
   end
   
   // Stretch write pulse from 500MHz to 125MHz domain
-  // Hold address/data for 4 cycles (one full cpu_clk period)
-  logic [2:0] wen_stretch;
+  // Hold address/data for 10+ cycles to guarantee cpu_clk sees it
+  // (cpu_clk period = 8 fast clock cycles)
+  // Block new writes until current one completes to avoid data loss
+  logic [3:0] wen_stretch;
   logic [15:0] latched_waddr;
   logic [63:0] latched_wdata;
+  logic write_busy;
+  
+  assign write_busy = (wen_stretch != 0);
   
   always_ff @(posedge clk) begin
     if (rst) begin
       wen_stretch <= 0;
-    end else if (bar_wen) begin
+    end else if (bar_wen && !write_busy) begin
       // Capture address and data, start stretch counter
-      wen_stretch <= 3'd4;  // Hold for 4 fast clocks
+      wen_stretch <= 4'd10;  // Hold for 10 fast clocks (>1 cpu_clk period)
       latched_waddr <= bar_waddr[15:0];
       latched_wdata <= axi_lite_s_wdata;
     end else if (wen_stretch != 0) begin
