@@ -304,8 +304,7 @@ module axi_core_hw(
   end
   
   riscv_soc u_soc(
-    .clk(clk),           // Use AXI clock directly
-    .clk_en(1'b1),
+    .clk(clk),
     .rst_n(rst_n_sync),
     .bar_addr(bar_wen ? bar_waddr[15:0] : bar_raddr[15:0]),
     .bar_wdata(bar_wdata_captured),
