@@ -1,0 +1,10 @@
+==========================================
+RISC-V on FPGA Build
+Revision ID: 0x07
+Build dir: /repo/eelljay/risc-v-on-fpga/build
+==========================================
+
+[Step 1/4] Setting up build directory...
+[Step 2/4] Generating Qsys...
+./build_fpga.sh: line 41: qsys-script: command not found
+Error: pcie_ed.qsys was not generated
