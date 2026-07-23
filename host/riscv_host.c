@@ -159,8 +159,10 @@ int vfio_init(const char *pci_addr, int iommu_group) {
     }
 
     bar_size = region_info.size;
-    printf("BAR0: size=0x%lx, offset=0x%lx, flags=0x%x\n",
-           region_info.size, region_info.offset, region_info.flags);
+    printf("BAR0: size=0x%llx, offset=0x%llx, flags=0x%x\n",
+           (unsigned long long)region_info.size, 
+           (unsigned long long)region_info.offset, 
+           region_info.flags);
 
     // Map BAR0
     bar = mmap(NULL, bar_size, PROT_READ | PROT_WRITE,
@@ -220,9 +222,19 @@ int main(int argc, char *argv[]) {
     // Reset CPU
     printf("Resetting CPU...\n");
     cpu_reset();
+    printf("  CTRL after reset: 0x%X\n", read32(BAR_CTRL));
+    printf("  STATUS after reset: 0x%X\n", read32(BAR_STATUS));
+    printf("  PC after reset: 0x%X\n", cpu_get_pc());
 
     // Load program
     load_program(test_program, sizeof(test_program) / sizeof(test_program[0]));
+    
+    // Verify IMEM
+    printf("Verifying IMEM:\n");
+    for (int i = 0; i < 5; i++) {
+        printf("  IMEM[%d] = 0x%08X (expected 0x%08X)\n", 
+               i, read32(BAR_IMEM + i*4), test_program[i]);
+    }
 
     // Clear DMEM[0]
     write_dmem(0, 0);
@@ -231,7 +243,13 @@ int main(int argc, char *argv[]) {
     // Run CPU
     printf("Running CPU...\n");
     cpu_run();
+    printf("  CTRL after run: 0x%X\n", read32(BAR_CTRL));
+    printf("  STATUS after run: 0x%X\n", read32(BAR_STATUS));
+    
     usleep(100000);  // 100ms
+    
+    printf("  STATUS after 100ms: 0x%X\n", read32(BAR_STATUS));
+    printf("  PC after 100ms: 0x%X\n", cpu_get_pc());
 
     // Check results
     printf("\nResults:\n");
