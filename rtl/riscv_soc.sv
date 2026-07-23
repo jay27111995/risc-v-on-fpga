@@ -42,6 +42,7 @@ module riscv_soc (
     input  logic [15:0] bar_addr,      // Byte address within BAR
     input  logic [63:0] bar_wdata,     // Write data (64-bit)
     input  logic        bar_wen,       // Write enable
+    input  logic        bar_ren,       // Read enable (captures read data)
     output logic [63:0] bar_rdata      // Read data (64-bit)
 );
 
@@ -93,9 +94,11 @@ module riscv_soc (
         end
     end
     
-    // Host read port (registered for timing)
+    // Host read port (registered, only capture when read enable)
     always_ff @(posedge clk) begin
-        imem_host_rdata <= imem[bar_addr[11:2]];
+        if (bar_ren && bar_addr[15:12] == 4'h1) begin
+            imem_host_rdata <= imem[bar_addr[11:2]];
+        end
     end
     
     // Initialize to NOPs (ADDI x0, x0, 0)
@@ -135,9 +138,11 @@ module riscv_soc (
     // CPU read port (combinational for same-cycle read in MEM stage)
     assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
-    // Host read port (registered for timing)
+    // Host read port (registered, only capture when read enable)
     always_ff @(posedge clk) begin
-        dmem_host_rdata <= dmem[host_dmem_idx];
+        if (bar_ren && bar_addr[15:13] == 3'b001) begin
+            dmem_host_rdata <= dmem[host_dmem_idx];
+        end
     end
     
     // Initialize to zero
