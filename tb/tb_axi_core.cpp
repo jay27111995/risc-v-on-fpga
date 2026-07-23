@@ -8,9 +8,12 @@ public:
     Vaxi_core_hw* dut;
     int cycle;
     
+    int fast_cycle;  // Track fast clock cycles (unused in simple mode)
+    
     AxiTb() {
         dut = new Vaxi_core_hw;
         cycle = 0;
+        fast_cycle = 0;
         
         // Initialize all inputs
         dut->clk = 0;
@@ -47,6 +50,8 @@ public:
     ~AxiTb() { delete dut; }
     
     void tick() {
+        // Run both clocks together for simplicity
+        // Real hardware has 4:1 ratio but with PCIe latency between writes
         dut->clk = 0;
         dut->cpu_clk = 0;
         dut->eval();
@@ -56,7 +61,12 @@ public:
         cycle++;
     }
     
-    // AXI-Lite write transaction
+    // Fast tick - same as tick for now (simplifies testing)
+    void fast_tick() {
+        tick();
+    }
+    
+    // AXI-Lite write transaction (uses fast_tick for AXI timing)
     void axi_write(uint32_t addr, uint64_t data) {
         dut->axi_lite_s_awaddr = addr;
         dut->axi_lite_s_awvalid = 1;
@@ -66,39 +76,43 @@ public:
         
         int timeout = 100;
         while ((!dut->axi_lite_s_awready || !dut->axi_lite_s_wready) && timeout-- > 0) {
-            tick();
+            fast_tick();
         }
-        tick();
+        fast_tick();
         
         dut->axi_lite_s_awvalid = 0;
         dut->axi_lite_s_wvalid = 0;
         
         timeout = 100;
         while (!dut->axi_lite_s_bvalid && timeout-- > 0) {
-            tick();
+            fast_tick();
         }
-        tick();
+        fast_tick();
+        
+        // Wait for write to propagate to CPU domain (stretch completes)
+        // Need at least 10 fast clocks for the stretch, plus margin
+        for (int i = 0; i < 16; i++) fast_tick();
     }
     
-    // AXI-Lite read transaction
+    // AXI-Lite read transaction (uses fast_tick for AXI timing)
     uint64_t axi_read(uint32_t addr) {
         dut->axi_lite_s_araddr = addr;
         dut->axi_lite_s_arvalid = 1;
         
         int timeout = 100;
         while (!dut->axi_lite_s_arready && timeout-- > 0) {
-            tick();
+            fast_tick();
         }
-        tick();
+        fast_tick();
         
         dut->axi_lite_s_arvalid = 0;
         
         timeout = 100;
         while (!dut->axi_lite_s_rvalid && timeout-- > 0) {
-            tick();
+            fast_tick();
         }
         uint64_t data = dut->axi_lite_s_rdata;
-        tick();
+        fast_tick();
         
         return data;
     }
