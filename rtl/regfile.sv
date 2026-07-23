@@ -1,6 +1,7 @@
 // Register File - 32 registers x 32 bits
 // 2 read ports (combinational), 1 write port (sequential)
 // x0 is hardwired to 0
+// Includes write-first bypass: reading a register being written returns the new value
 module regfile (
     input  logic        clk,
     input  logic        we,         // write enable
@@ -21,8 +22,15 @@ always_ff @(posedge clk) begin
         regs[rd_addr] <= rd_data;
 end
 
-// Read (combinational) - x0 always returns 0
-assign rs1_data = (rs1_addr == 0) ? 32'b0 : regs[rs1_addr];
-assign rs2_data = (rs2_addr == 0) ? 32'b0 : regs[rs2_addr];
+// Read (combinational) with write-first bypass
+// If reading the same register being written, return the write data
+// x0 always returns 0
+assign rs1_data = (rs1_addr == 0) ? 32'b0 :
+                  (we && rs1_addr == rd_addr) ? rd_data :
+                  regs[rs1_addr];
+
+assign rs2_data = (rs2_addr == 0) ? 32'b0 :
+                  (we && rs2_addr == rd_addr) ? rd_data :
+                  regs[rs2_addr];
 
 endmodule
