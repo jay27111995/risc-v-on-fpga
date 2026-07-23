@@ -17,7 +17,6 @@
 //
 module riscv_soc (
     input  logic        clk,
-    input  logic        clk_en,        // Clock enable (for slower CPU clock)
     input  logic        rst_n,
     
     // BAR interface (directly from axi_core)
@@ -41,8 +40,8 @@ module riscv_soc (
     logic cpu_rst;
     assign cpu_rst = ~rst_n | ctrl_reset;
     
-    // CPU running status - only run when clk_en is high
-    assign cpu_running = ctrl_run & ~ctrl_reset & clk_en;
+    // CPU running status
+    assign cpu_running = ctrl_run & ~ctrl_reset;
     
     // =========================================================================
     // IMEM - Instruction Memory (host writable, CPU readable)
