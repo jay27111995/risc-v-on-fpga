@@ -41,14 +41,13 @@ public:
         dut->cpu_clk = 0;
         dut->rst = 1;  // Active high reset
         
-        // Initialize AXI Master interface (directly memory mapped, directly memory mapped, directly memory mapped unused but need valid values)
+        // Initialize AXI Master interface (unused in this test, directly tied off)
         dut->axm_m0_awready = 1;
         dut->axm_m0_wready = 1;
         dut->axm_m0_bid = 0;
         dut->axm_m0_bvalid = 0;
         dut->axm_m0_arready = 1;
         dut->axm_m0_rid = 0;
-        // rdata is 1024-bit wide - leave at default (zeros)
         dut->axm_m0_rlast = 0;
         dut->axm_m0_rvalid = 0;
         
