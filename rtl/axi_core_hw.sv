@@ -271,8 +271,16 @@ module axi_core_hw(
   // Write enable - accept any write (32-bit or 64-bit)
   logic bar_wen;
   assign bar_wen = next_w_state == W_S2 && w_state != next_w_state && axi_lite_s_wstrb != 8'h00;
+  
+  // Capture address and data when we accept the transaction (W_S1)
   logic [21:0] bar_waddr;
-  assign bar_waddr = axi_lite_s_awaddr[21:0];
+  logic [63:0] bar_wdata_captured;
+  always_ff @(posedge clk) begin
+    if (w_state == W_S1) begin
+      bar_waddr <= axi_lite_s_awaddr[21:0];
+      bar_wdata_captured <= axi_lite_s_wdata;
+    end
+  end
 
   // Stub the DMA burst signals (not used by RISC-V SoC)
   assign rburst_req_valid = 0;
@@ -319,7 +327,7 @@ module axi_core_hw(
       // Capture address and data, start stretch counter
       wen_stretch <= 4'd10;  // Hold for 10 fast clocks (>1 cpu_clk period)
       latched_waddr <= bar_waddr[15:0];
-      latched_wdata <= axi_lite_s_wdata;
+      latched_wdata <= bar_wdata_captured;
     end else if (wen_stretch != 0) begin
       wen_stretch <= wen_stretch - 1;
     end
