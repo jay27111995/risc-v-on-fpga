@@ -293,19 +293,11 @@ module axi_core_hw(
 
   // =========================================================================
   // Simple single-clock design - CPU runs on AXI clock
-  // The 2-stage pipeline meets timing at 500MHz
   // =========================================================================
-  
-  // Reset synchronizer
-  logic rst_n_sync1, rst_n_sync;
-  always_ff @(posedge clk) begin
-    rst_n_sync1 <= ~rst;
-    rst_n_sync <= rst_n_sync1;
-  end
   
   riscv_soc u_soc(
     .clk(clk),
-    .rst_n(rst_n_sync),
+    .rst_n(~rst),
     .bar_addr(bar_wen ? bar_waddr[15:0] : bar_raddr[15:0]),
     .bar_wdata(bar_wdata_captured),
     .bar_wen(bar_wen),
