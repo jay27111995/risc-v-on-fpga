@@ -224,7 +224,8 @@ module axi_core_hw(
 
   logic [21:0] bar_raddr;
   always_ff @(posedge clk) begin
-    if (next_r_state == R_S2 && r_state != next_r_state) begin
+    // Capture address when arvalid first asserted (entering R_S1)
+    if (r_state == R_S0 && axi_lite_s_arvalid) begin
       bar_raddr <= axi_lite_s_araddr[21:0];
     end
   end
@@ -267,9 +268,15 @@ module axi_core_hw(
     endcase
   end
 
-  // Write enable - accept any write (32-bit or 64-bit)
+  // Write enable - delayed by one cycle so captured address/data are valid
+  logic bar_wen_pre;
   logic bar_wen;
-  assign bar_wen = next_w_state == W_S2 && w_state != next_w_state && axi_lite_s_wstrb != 8'h00;
+  assign bar_wen_pre = next_w_state == W_S2 && w_state != next_w_state && axi_lite_s_wstrb != 8'h00;
+  
+  always_ff @(posedge clk) begin
+    if (rst) bar_wen <= 1'b0;
+    else bar_wen <= bar_wen_pre;
+  end
   
   // Capture address and data when we accept the transaction (W_S1)
   logic [21:0] bar_waddr;
@@ -293,8 +300,11 @@ module axi_core_hw(
   assign wburst_req_len = 0;
 
   // =========================================================================
-  // Simple single-clock design - CPU runs on AXI clock
+  // RISC-V SoC Instance
   // =========================================================================
+  
+  // Read enable: assert during R_S2 to capture read data from SoC
+  wire bar_ren = (r_state == R_S2);
   
   riscv_soc u_soc(
     .clk(clk),
@@ -302,6 +312,7 @@ module axi_core_hw(
     .bar_addr(bar_wen ? bar_waddr[15:0] : bar_raddr[15:0]),
     .bar_wdata(bar_wdata_captured),
     .bar_wen(bar_wen),
+    .bar_ren(bar_ren),
     .bar_rdata(axi_lite_s_rdata)
   );
 

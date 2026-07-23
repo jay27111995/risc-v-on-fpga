@@ -190,19 +190,15 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 10; i++) tb.tick();
     
     // ------------------------------------------------------------------------
-    // Verify IMEM Content (informational - readback timing may cause issues)
+    // Verify IMEM Content
     // ------------------------------------------------------------------------
     printf("Verifying IMEM content...\n");
     
-    int imem_mismatches = 0;
     for (int i = 0; i < program_size; i++) {
         uint64_t readback = tb.axi_read(0x1000 + i * 4);
         bool match = (readback == program[i]);
-        printf("  IMEM[%d] = 0x%08lX %s\n", i, readback, match ? "OK" : "(readback mismatch)");
-        if (!match) imem_mismatches++;
-    }
-    if (imem_mismatches > 0) {
-        printf("  Note: IMEM readback mismatches don't affect CPU execution.\n");
+        printf("  IMEM[%d] = 0x%08lX %s\n", i, readback, match ? "OK" : "MISMATCH");
+        if (!match) errors++;
     }
     printf("\n");
     

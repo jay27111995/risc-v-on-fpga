@@ -42,6 +42,7 @@ public:
         soc->rst_n = 0;
         soc->clk = 0;
         soc->bar_wen = 0;
+        soc->bar_ren = 0;
         soc->bar_addr = 0;
         soc->bar_wdata = 0;
         
@@ -68,6 +69,7 @@ public:
         soc->bar_addr = addr;
         soc->bar_wdata = data;
         soc->bar_wen = 1;
+        soc->bar_ren = 0;
         tick();
         soc->bar_wen = 0;
     }
@@ -76,8 +78,10 @@ public:
     uint64_t bar_read(uint16_t addr) {
         soc->bar_addr = addr;
         soc->bar_wen = 0;
-        tick();  // Address latched
-        tick();  // Data available
+        soc->bar_ren = 1;   // Assert read enable
+        tick();             // Address latched, data captured
+        soc->bar_ren = 0;
+        tick();             // Data available
         return soc->bar_rdata;
     }
     
