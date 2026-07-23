@@ -287,7 +287,8 @@ module axi_core_hw(
   // =========================================================================
   // Clock Domain Crossing (500MHz AXI -> 125MHz CPU)
   // For FPGA: cpu_clk is 125MHz from clock_div4x (synchronous to clk)
-  // Since clocks are synchronous, we use simple registering
+  // Since clocks are synchronous (125MHz is derived from 500MHz via /4),
+  // we need to stretch the write pulse to be seen by the slower clock.
   // =========================================================================
   
   // Synchronize reset to CPU clock domain (2-stage sync for metastability)
@@ -297,20 +298,35 @@ module axi_core_hw(
     cpu_rst_n <= cpu_rst_n_sync1;
   end
   
-  // Pass signals to CPU clock domain with proper timing
-  // The key insight: bar_wen64 is a 1-cycle pulse, we need to detect it
-  // and hold address/data valid when the pulse occurs
+  // Stretch write pulse from 500MHz to 125MHz domain
+  // Hold address/data for 4 cycles (one full cpu_clk period)
+  logic [2:0] wen_stretch;
+  logic [15:0] latched_waddr;
+  logic [63:0] latched_wdata;
   
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      wen_stretch <= 0;
+    end else if (bar_wen) begin
+      // Capture address and data, start stretch counter
+      wen_stretch <= 3'd4;  // Hold for 4 fast clocks
+      latched_waddr <= bar_waddr[15:0];
+      latched_wdata <= axi_lite_s_wdata;
+    end else if (wen_stretch != 0) begin
+      wen_stretch <= wen_stretch - 1;
+    end
+  end
+  
+  // Signals to CPU domain
   logic [15:0] cpu_bar_addr;
   logic [63:0] cpu_bar_wdata;
   logic        cpu_bar_wen;
   logic [63:0] cpu_bar_rdata;
   
-  // Use combinational logic for address and data - they're stable during the transaction
-  // The AXI state machine guarantees address is stable when bar_wen pulses
-  assign cpu_bar_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
-  assign cpu_bar_wdata = axi_lite_s_wdata;
-  assign cpu_bar_wen = bar_wen;
+  // Write enable is high while stretch counter is non-zero
+  assign cpu_bar_wen = (wen_stretch != 0);
+  assign cpu_bar_addr = cpu_bar_wen ? latched_waddr : bar_raddr[15:0];
+  assign cpu_bar_wdata = latched_wdata;
   
   // Read data passes back directly
   assign axi_lite_s_rdata = cpu_bar_rdata;
