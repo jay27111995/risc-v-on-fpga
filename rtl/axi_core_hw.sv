@@ -267,8 +267,9 @@ module axi_core_hw(
     endcase
   end
 
-  logic bar_wen64;
-  assign bar_wen64 = next_w_state == W_S2 && w_state != next_w_state && axi_lite_s_wstrb == 8'hff;
+  // Write enable - accept any write (32-bit or 64-bit)
+  logic bar_wen;
+  assign bar_wen = next_w_state == W_S2 && w_state != next_w_state && axi_lite_s_wstrb != 8'h00;
   logic [21:0] bar_waddr;
   assign bar_waddr = axi_lite_s_awaddr[21:0];
 
@@ -306,10 +307,10 @@ module axi_core_hw(
   logic [63:0] cpu_bar_rdata;
   
   // Use combinational logic for address and data - they're stable during the transaction
-  // The AXI state machine guarantees address is stable when bar_wen64 pulses
-  assign cpu_bar_addr = bar_wen64 ? bar_waddr[15:0] : bar_raddr[15:0];
+  // The AXI state machine guarantees address is stable when bar_wen pulses
+  assign cpu_bar_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
   assign cpu_bar_wdata = axi_lite_s_wdata;
-  assign cpu_bar_wen = bar_wen64;
+  assign cpu_bar_wen = bar_wen;
   
   // Read data passes back directly
   assign axi_lite_s_rdata = cpu_bar_rdata;
