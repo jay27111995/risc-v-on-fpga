@@ -1,339 +1,439 @@
-// RISC-V SoC with PCIe BAR interface
+// RISC-V SoC with PCIe BAR Interface
+// ============================================================================
 //
-// 3-Stage Pipeline:
-//   Stage 1 (IF/ID): Fetch instruction, Decode, Read registers
-//   Stage 2 (EX):    Execute ALU, Branch decision
-//   Stage 3 (MEM/WB): Memory access, Write back
+// A minimal RV32I CPU with classic 5-stage pipeline, designed for FPGA at 500MHz.
 //
-// Memory Map (BAR0):
-//   0x0000-0x00FF: Control registers
-//   0x1000-0x1FFF: IMEM (4KB, 1024 instructions)
-//   0x2000-0x3FFF: DMEM (8KB, shared with host)
+// Pipeline Stages:
+//   IF  - Instruction Fetch: Read instruction from IMEM
+//   ID  - Instruction Decode: Decode opcode, read register file
+//   EX  - Execute: ALU operation, branch decision
+//   MEM - Memory: Load/store access to DMEM
+//   WB  - Write Back: Write result to register file
+//
+// Hazard Handling:
+//   - Data forwarding from MEM and WB stages to EX stage
+//   - Load-use stall: 1 cycle when a load is followed by dependent instruction
+//   - Branch penalty: 2 cycles (flush IF/ID and ID/EX on taken branch)
+//
+// Memory Map (directly mapped to PCIe BAR0):
+//   0x0000-0x00FF  Control registers (64-bit aligned)
+//   0x1000-0x1FFF  IMEM - 4KB instruction memory (1024 x 32-bit)
+//   0x2000-0x3FFF  DMEM - 8KB data memory (2048 x 32-bit)
 //
 // Control Registers:
-//   0x00: CTRL    [0] RUN, [1] RESET (self-clearing)
-//   0x08: STATUS  [0] RUNNING, [1] HALTED
-//   0x10: PC      Current program counter (read-only)
-//   0x18: RESULT  CPU result output (read-only)
+//   0x00  CTRL    [0] RUN - enable CPU execution
+//                 [1] RESET - software reset (self-clearing)
+//   0x08  STATUS  [0] RUNNING - CPU is executing
+//   0x10  PC      Current program counter (read-only)
+//   0x18  RESULT  Last write-back value (read-only, for debug)
 //
+// ============================================================================
+
 module riscv_soc (
     input  logic        clk,
     input  logic        rst_n,
     
-    // BAR interface (directly from axi_core)
-    input  logic [15:0] bar_addr,      // byte address
-    input  logic [63:0] bar_wdata,     // write data
-    input  logic        bar_wen,       // write enable
-    output logic [63:0] bar_rdata      // read data
+    // BAR interface (directly from AXI wrapper)
+    input  logic [15:0] bar_addr,      // Byte address within BAR
+    input  logic [63:0] bar_wdata,     // Write data (64-bit)
+    input  logic        bar_wen,       // Write enable
+    output logic [63:0] bar_rdata      // Read data (64-bit)
 );
 
     // =========================================================================
     // Control Registers
     // =========================================================================
     
-    logic        ctrl_run;
-    logic        ctrl_reset;
-    logic        cpu_running;
-    logic [31:0] cpu_pc;
-    logic [31:0] cpu_result;
+    logic        ctrl_run;          // CPU run enable
+    logic        ctrl_reset;        // Software reset (self-clearing)
+    logic [31:0] cpu_pc;            // Current PC (for status readback)
+    logic [31:0] cpu_result;        // Last WB result (for debug)
     
-    logic cpu_rst;
+    // Internal control signals
+    logic cpu_rst;                  // Combined reset (hardware OR software)
+    logic cpu_running;              // CPU is actively executing
+    
     assign cpu_rst = ~rst_n | ctrl_reset;
     assign cpu_running = ctrl_run & ~ctrl_reset;
     
+    // Control register write logic
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (~rst_n) begin
+            ctrl_run <= 1'b0;
+            ctrl_reset <= 1'b0;
+        end else begin
+            // Self-clear the reset bit after one cycle
+            if (ctrl_reset)
+                ctrl_reset <= 1'b0;
+            
+            // Write to CTRL register at offset 0x00
+            if (bar_wen && bar_addr[15:12] == 4'h0 && bar_addr[7:3] == 5'd0) begin
+                ctrl_run   <= bar_wdata[0];
+                ctrl_reset <= bar_wdata[1];
+            end
+        end
+    end
+
     // =========================================================================
-    // IMEM - Instruction Memory (host writable, CPU readable)
+    // IMEM - Instruction Memory (4KB, host-writable, CPU-readable)
     // =========================================================================
     
-    logic [31:0] imem [0:1023];
-    logic [31:0] imem_rdata;
+    logic [31:0] imem [0:1023];      // 1024 x 32-bit = 4KB
+    logic [31:0] imem_host_rdata;    // Registered read for host access
     
-    // Host write to IMEM
+    // Host write port
     always_ff @(posedge clk) begin
         if (bar_wen && bar_addr[15:12] == 4'h1) begin
             imem[bar_addr[11:2]] <= bar_wdata[31:0];
         end
     end
     
-    // CPU read from IMEM (registered)
-    logic [31:0] cpu_instr_fetched;
+    // Host read port (registered for timing)
     always_ff @(posedge clk) begin
-        cpu_instr_fetched <= imem[cpu_pc[11:2]];
+        imem_host_rdata <= imem[bar_addr[11:2]];
     end
     
-    // Host read from IMEM
-    always_ff @(posedge clk) begin
-        imem_rdata <= imem[bar_addr[11:2]];
-    end
-    
+    // Initialize to NOPs (ADDI x0, x0, 0)
     initial begin
         for (int i = 0; i < 1024; i++)
-            imem[i] = 32'h00000013;  // NOP
+            imem[i] = 32'h00000013;
     end
     
     // =========================================================================
-    // DMEM - Data Memory (shared between host and CPU)
+    // DMEM - Data Memory (8KB, shared between host and CPU)
     // =========================================================================
     
-    logic [31:0] dmem [0:2047];
-    logic [31:0] dmem_host_rdata;
+    logic [31:0] dmem [0:2047];      // 2048 x 32-bit = 8KB
+    logic [31:0] dmem_host_rdata;    // Registered read for host access
     
-    logic [31:0] cpu_dmem_addr;
-    logic [31:0] cpu_dmem_wdata;
-    logic [31:0] cpu_dmem_rdata;
-    logic        cpu_dmem_we;
+    // CPU port signals
+    logic [31:0] cpu_dmem_addr;      // Address from MEM stage
+    logic [31:0] cpu_dmem_wdata;     // Write data from MEM stage
+    logic [31:0] cpu_dmem_rdata;     // Read data to MEM stage
+    logic        cpu_dmem_we;        // Write enable from MEM stage
     
-    logic [10:0] host_dmem_idx;
-    logic [10:0] cpu_dmem_idx;
+    // Address indexing
+    wire [10:0] host_dmem_idx = bar_addr[12:2];
+    wire [10:0] cpu_dmem_idx  = cpu_dmem_addr[12:2];
     
-    assign host_dmem_idx = bar_addr[12:2];
-    assign cpu_dmem_idx = cpu_dmem_addr[12:2];
-    
+    // Dual-port memory: host has priority over CPU for writes
     always_ff @(posedge clk) begin
         if (bar_wen && bar_addr[15:13] == 3'b001) begin
+            // Host write (addresses 0x2000-0x3FFF)
             dmem[host_dmem_idx] <= bar_wdata[31:0];
         end else if (cpu_dmem_we && cpu_running) begin
+            // CPU write
             dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
         end
     end
     
+    // CPU read port (combinational for same-cycle read in MEM stage)
     assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
+    // Host read port (registered for timing)
     always_ff @(posedge clk) begin
         dmem_host_rdata <= dmem[host_dmem_idx];
     end
     
+    // Initialize to zero
     initial begin
         for (int i = 0; i < 2048; i++)
-            dmem[i] = 32'b0;
+            dmem[i] = 32'h0;
     end
     
     // =========================================================================
-    // Control Register Logic
-    // =========================================================================
-    
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (~rst_n) begin
-            ctrl_run <= 0;
-            ctrl_reset <= 0;
-        end else begin
-            if (ctrl_reset)
-                ctrl_reset <= 0;
-            
-            if (bar_wen && bar_addr[15:12] == 4'h0) begin
-                if (bar_addr[7:3] == 5'd0) begin
-                    ctrl_run <= bar_wdata[0];
-                    ctrl_reset <= bar_wdata[1];
-                end
-            end
-        end
-    end
-    
-    // =========================================================================
-    // BAR Read Mux
+    // BAR Read Multiplexer
     // =========================================================================
     
     always_comb begin
-        bar_rdata = 64'b0;
+        bar_rdata = 64'h0;
+        
         case (bar_addr[15:12])
-            4'h0: begin
+            4'h0: begin  // Control registers
                 case (bar_addr[7:3])
-                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};
-                    5'd1: bar_rdata = {62'b0, 1'b0, cpu_running};
-                    5'd2: bar_rdata = {32'b0, cpu_pc};
-                    5'd3: bar_rdata = {32'b0, cpu_result};
-                    default: bar_rdata = 64'b0;
+                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};  // CTRL
+                    5'd1: bar_rdata = {63'b0, cpu_running};           // STATUS
+                    5'd2: bar_rdata = {32'b0, cpu_pc};                // PC
+                    5'd3: bar_rdata = {32'b0, cpu_result};            // RESULT
+                    default: bar_rdata = 64'h0;
                 endcase
             end
-            4'h1: bar_rdata = {32'b0, imem_rdata};
-            4'h2, 4'h3: bar_rdata = {32'b0, dmem_host_rdata};
-            default: bar_rdata = 64'b0;
+            4'h1:        bar_rdata = {32'b0, imem_host_rdata};  // IMEM
+            4'h2, 4'h3:  bar_rdata = {32'b0, dmem_host_rdata};  // DMEM
+            default:     bar_rdata = 64'h0;
         endcase
     end
-    
+
     // =========================================================================
-    // 3-Stage Pipeline RISC-V CPU
-    // 
-    // Stage 1 (IF/ID): Fetch, Decode, Register Read
-    // Stage 2 (EX):    Execute ALU, Branch decision
-    // Stage 3 (MEM/WB): Memory access, Write back
+    // Pipeline Hazard Control
     // =========================================================================
     
-    // ---------- Stage 1: Fetch + Decode ----------
+    logic stall;    // Stall IF and ID (insert bubble in EX)
+    logic flush;    // Flush IF/ID and ID/EX (branch misprediction)
     
-    logic [4:0]  s1_rs1, s1_rs2, s1_rd;
-    logic [31:0] s1_imm;
-    logic [2:0]  s1_alu_op;
-    logic        s1_reg_write;
-    logic        s1_alu_src;
-    logic        s1_mem_read;
-    logic        s1_mem_write;
-    logic        s1_branch;
+    // Forward declarations for hazard detection
+    logic        ex_mem_read;
+    logic        ex_valid;
+    logic [4:0]  ex_rd;
+    logic [4:0]  id_rs1, id_rs2;
+    logic        ex_branch_taken;
+
+    // Load-use hazard: instruction in EX is a load, and ID needs that register
+    assign stall = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
+                   ((ex_rd == id_rs1) || (ex_rd == id_rs2));
+    
+    // Control hazard: branch taken, flush the two instructions behind it
+    assign flush = ex_branch_taken;
+
+    // =========================================================================
+    // Stage 1: IF (Instruction Fetch)
+    // =========================================================================
+    
+    logic [31:0] if_pc;             // Current PC
+    logic [31:0] if_instr;          // Fetched instruction
+    
+    // Branch target from EX stage (forward declaration resolved below)
+    logic [31:0] ex_branch_target;
+    
+    // Next PC selection
+    wire [31:0] if_pc_next = ex_branch_taken ? ex_branch_target : (if_pc + 32'd4);
+    
+    // PC register
+    always_ff @(posedge clk) begin
+        if (cpu_rst) begin
+            if_pc <= 32'h0;
+        end else if (cpu_running && !stall) begin
+            if_pc <= if_pc_next;
+        end
+    end
+    
+    // Instruction fetch (combinational IMEM read)
+    assign if_instr = imem[if_pc[11:2]];
+    
+    // Export PC for debug/status
+    assign cpu_pc = if_pc;
+
+    // =========================================================================
+    // IF/ID Pipeline Register
+    // =========================================================================
+    
+    logic [31:0] id_pc;
+    logic [31:0] id_instr;
+    logic        id_valid;
+    
+    always_ff @(posedge clk) begin
+        if (cpu_rst || flush) begin
+            // Insert bubble (NOP)
+            id_valid <= 1'b0;
+            id_instr <= 32'h00000013;  // NOP
+        end else if (cpu_running && !stall) begin
+            id_pc    <= if_pc;
+            id_instr <= if_instr;
+            id_valid <= 1'b1;
+        end
+        // When stalled: hold current values (implicit)
+    end
+
+    // =========================================================================
+    // Stage 2: ID (Instruction Decode + Register Read)
+    // =========================================================================
+    
+    // Decoder outputs
+    logic [4:0]  id_rd;
+    logic [31:0] id_imm;
+    logic [2:0]  id_alu_op;
+    logic        id_reg_write;
+    logic        id_alu_src;
+    logic        id_mem_read;
+    logic        id_mem_write;
+    logic        id_branch;
     
     decoder decoder_inst (
-        .instr(cpu_instr_fetched),
-        .rs1(s1_rs1),
-        .rs2(s1_rs2),
-        .rd(s1_rd),
-        .imm(s1_imm),
-        .alu_op(s1_alu_op),
-        .reg_write(s1_reg_write),
-        .alu_src(s1_alu_src),
-        .mem_read(s1_mem_read),
-        .mem_write(s1_mem_write),
-        .branch(s1_branch)
+        .instr     (id_instr),
+        .rs1       (id_rs1),
+        .rs2       (id_rs2),
+        .rd        (id_rd),
+        .imm       (id_imm),
+        .alu_op    (id_alu_op),
+        .reg_write (id_reg_write),
+        .alu_src   (id_alu_src),
+        .mem_read  (id_mem_read),
+        .mem_write (id_mem_write),
+        .branch    (id_branch)
     );
     
-    // Register File - writes from Stage 3
-    logic [31:0] s1_rs1_data, s1_rs2_data;
-    logic [31:0] s3_rd_data;
-    logic        s3_reg_write;
-    logic [4:0]  s3_rd;
+    // Register file
+    logic [31:0] id_rs1_data, id_rs2_data;
+    logic [31:0] wb_rd_data;
+    logic        wb_reg_write;
+    logic [4:0]  wb_rd;
     
     regfile regfile_inst (
-        .clk(clk),
-        .we(s3_reg_write & cpu_running),
-        .rs1_addr(s1_rs1),
-        .rs2_addr(s1_rs2),
-        .rd_addr(s3_rd),
-        .rd_data(s3_rd_data),
-        .rs1_data(s1_rs1_data),
-        .rs2_data(s1_rs2_data)
+        .clk      (clk),
+        .we       (wb_reg_write && cpu_running),
+        .rs1_addr (id_rs1),
+        .rs2_addr (id_rs2),
+        .rd_addr  (wb_rd),
+        .rd_data  (wb_rd_data),
+        .rs1_data (id_rs1_data),
+        .rs2_data (id_rs2_data)
     );
+
+    // =========================================================================
+    // ID/EX Pipeline Register
+    // =========================================================================
     
-    logic [31:0] s1_pc;
+    logic [31:0] ex_pc;
+    logic [31:0] ex_rs1_data, ex_rs2_data;
+    logic [31:0] ex_imm;
+    logic [2:0]  ex_alu_op;
+    logic [4:0]  ex_rs1, ex_rs2;
+    logic        ex_reg_write;
+    logic        ex_alu_src;
+    logic        ex_mem_write;
+    logic        ex_branch;
     
-    // ---------- Pipeline Register 1 (IF/ID → EX) ----------
-    
-    logic [31:0] s2_pc;
-    logic [31:0] s2_rs1_data, s2_rs2_data;
-    logic [31:0] s2_imm;
-    logic [2:0]  s2_alu_op;
-    logic [4:0]  s2_rd;
-    logic        s2_reg_write;
-    logic        s2_alu_src;
-    logic        s2_mem_read;
-    logic        s2_mem_write;
-    logic        s2_branch;
-    logic        s2_valid;
-    
-    // Data forwarding from Stage 2 (EX) and Stage 3 (WB)
-    logic [31:0] s2_alu_result;  // Forward declaration for forwarding
-    
-    logic [31:0] s1_rs1_fwd, s1_rs2_fwd;
-    logic        fwd_s2_rs1, fwd_s2_rs2;
-    logic        fwd_s3_rs1, fwd_s3_rs2;
-    
-    // Forward from Stage 2 (ALU result, not yet written)
-    assign fwd_s2_rs1 = s2_reg_write && (s2_rd != 0) && (s2_rd == s1_rs1) && !s2_mem_read;
-    assign fwd_s2_rs2 = s2_reg_write && (s2_rd != 0) && (s2_rd == s1_rs2) && !s2_mem_read;
-    
-    // Forward from Stage 3 (final write-back value)
-    assign fwd_s3_rs1 = s3_reg_write && (s3_rd != 0) && (s3_rd == s1_rs1) && !fwd_s2_rs1;
-    assign fwd_s3_rs2 = s3_reg_write && (s3_rd != 0) && (s3_rd == s1_rs2) && !fwd_s2_rs2;
-    
-    assign s1_rs1_fwd = fwd_s2_rs1 ? s2_alu_result : 
-                        fwd_s3_rs1 ? s3_rd_data : s1_rs1_data;
-    assign s1_rs2_fwd = fwd_s2_rs2 ? s2_alu_result : 
-                        fwd_s3_rs2 ? s3_rd_data : s1_rs2_data;
-    
-    // Pipeline register 1 update
     always_ff @(posedge clk) begin
-        if (cpu_rst) begin
-            s2_valid <= 0;
-            s2_reg_write <= 0;
-            s2_mem_write <= 0;
-            s2_branch <= 0;
+        if (cpu_rst || flush || stall) begin
+            // Insert bubble
+            ex_valid     <= 1'b0;
+            ex_reg_write <= 1'b0;
+            ex_mem_read  <= 1'b0;
+            ex_mem_write <= 1'b0;
+            ex_branch    <= 1'b0;
         end else if (cpu_running) begin
-            s2_pc <= s1_pc;
-            s2_rs1_data <= s1_rs1_fwd;
-            s2_rs2_data <= s1_rs2_fwd;
-            s2_imm <= s1_imm;
-            s2_alu_op <= s1_alu_op;
-            s2_rd <= s1_rd;
-            s2_reg_write <= s1_reg_write;
-            s2_alu_src <= s1_alu_src;
-            s2_mem_read <= s1_mem_read;
-            s2_mem_write <= s1_mem_write;
-            s2_branch <= s1_branch;
-            s2_valid <= 1;
+            ex_pc        <= id_pc;
+            ex_rs1_data  <= id_rs1_data;
+            ex_rs2_data  <= id_rs2_data;
+            ex_imm       <= id_imm;
+            ex_alu_op    <= id_alu_op;
+            ex_rs1       <= id_rs1;
+            ex_rs2       <= id_rs2;
+            ex_rd        <= id_rd;
+            ex_reg_write <= id_reg_write && id_valid;
+            ex_alu_src   <= id_alu_src;
+            ex_mem_read  <= id_mem_read  && id_valid;
+            ex_mem_write <= id_mem_write && id_valid;
+            ex_branch    <= id_branch    && id_valid;
+            ex_valid     <= id_valid;
         end
     end
+
+    // =========================================================================
+    // Stage 3: EX (Execute)
+    // =========================================================================
     
-    // ---------- Stage 2: Execute (ALU only) ----------
+    // --- Data Forwarding Logic ---
+    // Forward from MEM stage (has priority - more recent result)
+    logic [31:0] mem_alu_result;
+    logic        mem_reg_write;
+    logic [4:0]  mem_rd;
     
-    logic [31:0] s2_alu_b;
-    assign s2_alu_b = s2_alu_src ? s2_imm : s2_rs2_data;
+    wire fwd_mem_rs1 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs1);
+    wire fwd_mem_rs2 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs2);
     
-    logic s2_alu_zero;
+    // Forward from WB stage (only if MEM isn't forwarding)
+    wire fwd_wb_rs1 = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs1) && !fwd_mem_rs1;
+    wire fwd_wb_rs2 = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs2) && !fwd_mem_rs2;
+    
+    // Forwarding muxes
+    wire [31:0] ex_fwd_rs1 = fwd_mem_rs1 ? mem_alu_result :
+                            fwd_wb_rs1  ? wb_rd_data     :
+                            ex_rs1_data;
+    
+    wire [31:0] ex_fwd_rs2 = fwd_mem_rs2 ? mem_alu_result :
+                            fwd_wb_rs2  ? wb_rd_data     :
+                            ex_rs2_data;
+    
+    // ALU operand selection
+    wire [31:0] ex_alu_a = ex_fwd_rs1;
+    wire [31:0] ex_alu_b = ex_alu_src ? ex_imm : ex_fwd_rs2;
+    
+    // ALU instance
+    logic [31:0] ex_alu_result;
+    logic        ex_alu_zero;
     
     alu alu_inst (
-        .a(s2_rs1_data),
-        .b(s2_alu_b),
-        .op(s2_alu_op),
-        .result(s2_alu_result),
-        .zero(s2_alu_zero)
+        .a      (ex_alu_a),
+        .b      (ex_alu_b),
+        .op     (ex_alu_op),
+        .result (ex_alu_result),
+        .zero   (ex_alu_zero)
     );
     
-    // Branch decision (happens in Stage 2)
-    logic        s2_take_branch;
-    logic [31:0] s2_branch_addr;
+    // Branch decision (BEQ: branch if rs1 == rs2)
+    assign ex_branch_taken  = ex_branch && ex_alu_zero && ex_valid;
+    assign ex_branch_target = ex_pc + ex_imm;
+
+    // =========================================================================
+    // EX/MEM Pipeline Register
+    // =========================================================================
     
-    assign s2_take_branch = s2_branch & s2_alu_zero & s2_valid;
-    assign s2_branch_addr = s2_pc + s2_imm;
-    
-    // ---------- Pipeline Register 2 (EX → MEM/WB) ----------
-    
-    logic [31:0] s3_alu_result;
-    logic [31:0] s3_rs2_data;
-    logic        s3_mem_read;
-    logic        s3_mem_write;
-    logic        s3_valid;
+    logic [31:0] mem_store_data;    // Data to store (forwarded rs2)
+    logic        mem_mem_read;
+    logic        mem_mem_write;
+    logic        mem_valid;
     
     always_ff @(posedge clk) begin
         if (cpu_rst) begin
-            s3_valid <= 0;
-            s3_reg_write <= 0;
-            s3_mem_write <= 0;
+            mem_valid     <= 1'b0;
+            mem_reg_write <= 1'b0;
+            mem_mem_read  <= 1'b0;
+            mem_mem_write <= 1'b0;
         end else if (cpu_running) begin
-            s3_alu_result <= s2_alu_result;
-            s3_rs2_data <= s2_rs2_data;
-            s3_rd <= s2_rd;
-            s3_reg_write <= s2_reg_write;
-            s3_mem_read <= s2_mem_read;
-            s3_mem_write <= s2_mem_write;
-            s3_valid <= s2_valid;
+            mem_alu_result <= ex_alu_result;
+            mem_store_data <= ex_fwd_rs2;      // Use forwarded value for stores
+            mem_rd         <= ex_rd;
+            mem_reg_write  <= ex_reg_write;
+            mem_mem_read   <= ex_mem_read;
+            mem_mem_write  <= ex_mem_write;
+            mem_valid      <= ex_valid;
         end
     end
+
+    // =========================================================================
+    // Stage 4: MEM (Memory Access)
+    // =========================================================================
     
-    // ---------- Stage 3: Memory + Write Back ----------
+    // Connect to DMEM
+    assign cpu_dmem_addr  = mem_alu_result;
+    assign cpu_dmem_wdata = mem_store_data;
+    assign cpu_dmem_we    = mem_mem_write && mem_valid;
     
-    // DMEM interface
-    assign cpu_dmem_addr = s3_alu_result;
-    assign cpu_dmem_wdata = s3_rs2_data;
-    assign cpu_dmem_we = s3_mem_write & s3_valid;
+    // Memory read data (combinational - available same cycle)
+    wire [31:0] mem_load_data = cpu_dmem_rdata;
+
+    // =========================================================================
+    // MEM/WB Pipeline Register
+    // =========================================================================
     
-    // Write-back mux
-    assign s3_rd_data = s3_mem_read ? cpu_dmem_rdata : s3_alu_result;
-    
-    // ---------- Program Counter ----------
+    logic [31:0] wb_alu_result;
+    logic [31:0] wb_load_data;
+    logic        wb_mem_read;
+    logic        wb_valid;
     
     always_ff @(posedge clk) begin
         if (cpu_rst) begin
-            cpu_pc <= 32'b0;
-            s1_pc <= 32'b0;
+            wb_valid     <= 1'b0;
+            wb_reg_write <= 1'b0;
         end else if (cpu_running) begin
-            s1_pc <= cpu_pc;
-            
-            if (s2_take_branch) begin
-                cpu_pc <= s2_branch_addr;
-            end else begin
-                cpu_pc <= cpu_pc + 4;
-            end
+            wb_alu_result <= mem_alu_result;
+            wb_load_data  <= mem_load_data;
+            wb_rd         <= mem_rd;
+            wb_reg_write  <= mem_reg_write;
+            wb_mem_read   <= mem_mem_read;
+            wb_valid      <= mem_valid;
         end
     end
+
+    // =========================================================================
+    // Stage 5: WB (Write Back)
+    // =========================================================================
     
-    // Debug output
-    assign cpu_result = s3_rd_data;
+    // Select between ALU result and memory load data
+    assign wb_rd_data = wb_mem_read ? wb_load_data : wb_alu_result;
+    
+    // Debug output: last value written to register file
+    assign cpu_result = wb_rd_data;
 
 endmodule
