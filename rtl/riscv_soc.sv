@@ -177,10 +177,22 @@ module riscv_soc (
     logic [4:0]  ex_rd;
     logic [4:0]  id_rs1, id_rs2;
     logic        ex_branch_taken;
+    logic        mem_mem_read;
+    logic        mem_valid;
+    logic [4:0]  mem_rd;
+    logic [4:0]  ex_rs1, ex_rs2;
 
-    // Load-use hazard: instruction in EX is a load, and ID needs that register
-    assign stall = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
-                   ((ex_rd == id_rs1) || (ex_rd == id_rs2));
+    // Load-use hazard: stall when EX has a load and ID needs that register
+    // For loads in MEM/WB, we stall an extra cycle if dependent instruction needs it
+    // (because we don't forward load data - it goes through register file with bypass)
+    wire stall_ex_load = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
+                         ((ex_rd == id_rs1) || (ex_rd == id_rs2));
+    
+    // Stall if MEM has a load and EX needs it (load data not available yet)
+    wire stall_mem_load = mem_mem_read && mem_valid && (mem_rd != 5'd0) &&
+                          ((mem_rd == ex_rs1) || (mem_rd == ex_rs2));
+    
+    assign stall = stall_ex_load || stall_mem_load;
     
     // Control hazard: branch taken, flush the two instructions behind it
     assign flush = ex_branch_taken;
@@ -287,7 +299,7 @@ module riscv_soc (
     logic [31:0] ex_rs1_data, ex_rs2_data;
     logic [31:0] ex_imm;
     logic [2:0]  ex_alu_op;
-    logic [4:0]  ex_rs1, ex_rs2;
+    // ex_rs1, ex_rs2 declared in forward declarations
     logic        ex_reg_write;
     logic        ex_alu_src;
     logic        ex_mem_write;
@@ -324,25 +336,29 @@ module riscv_soc (
     // =========================================================================
     
     // --- Data Forwarding Logic ---
-    // Forward from MEM stage (has priority - more recent result)
+    // Forward from MEM stage (ALU results, available immediately)
+    // Forward from WB stage (ALU results only, NOT load data - use register file bypass for loads)
     logic [31:0] mem_alu_result;
     logic        mem_reg_write;
-    logic [4:0]  mem_rd;
+    // mem_mem_read, mem_rd declared in forward declarations
     
+    // wb_mem_read, wb_alu_result declared later in MEM/WB section
+    
+    // Forward from MEM stage
     wire fwd_mem_rs1 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs1);
     wire fwd_mem_rs2 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs2);
     
-    // Forward from WB stage (only if MEM isn't forwarding)
-    wire fwd_wb_rs1 = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs1) && !fwd_mem_rs1;
-    wire fwd_wb_rs2 = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs2) && !fwd_mem_rs2;
+    // Forward from WB stage - but NOT if WB has load data (creates long timing path)
+    wire fwd_wb_rs1 = wb_reg_write && !wb_mem_read && (wb_rd != 5'd0) && (wb_rd == ex_rs1) && !fwd_mem_rs1;
+    wire fwd_wb_rs2 = wb_reg_write && !wb_mem_read && (wb_rd != 5'd0) && (wb_rd == ex_rs2) && !fwd_mem_rs2;
     
     // Forwarding muxes
     wire [31:0] ex_fwd_rs1 = fwd_mem_rs1 ? mem_alu_result :
-                            fwd_wb_rs1  ? wb_rd_data     :
+                            fwd_wb_rs1  ? wb_alu_result :
                             ex_rs1_data;
     
     wire [31:0] ex_fwd_rs2 = fwd_mem_rs2 ? mem_alu_result :
-                            fwd_wb_rs2  ? wb_rd_data     :
+                            fwd_wb_rs2  ? wb_alu_result :
                             ex_rs2_data;
     
     // ALU operand selection
@@ -370,9 +386,8 @@ module riscv_soc (
     // =========================================================================
     
     logic [31:0] mem_store_data;    // Data to store (forwarded rs2)
-    logic        mem_mem_read;
     logic        mem_mem_write;
-    logic        mem_valid;
+    // mem_mem_read, mem_valid, mem_rd declared in forward declarations
     
     always_ff @(posedge clk) begin
         if (cpu_rst) begin
