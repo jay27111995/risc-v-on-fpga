@@ -24,19 +24,29 @@
 #define CTRL_RESET    (1 << 1)
 
 // Global state
-static volatile uint32_t *bar = NULL;
+static volatile uint64_t *bar64 = NULL;
+static volatile uint32_t *bar32 = NULL;
 static size_t bar_size = 0;
 static int container_fd = -1;
 static int group_fd = -1;
 static int device_fd = -1;
 
-// Register access
+// Register access (64-bit aligned for AXI-Lite)
+void write64(uint32_t offset, uint64_t value) {
+    bar64[offset / 8] = value;
+}
+
+uint64_t read64(uint32_t offset) {
+    return bar64[offset / 8];
+}
+
+// 32-bit access (for control registers, which are 64-bit but we only use low 32)
 void write32(uint32_t offset, uint32_t value) {
-    bar[offset / 4] = value;
+    write64(offset, value);
 }
 
 uint32_t read32(uint32_t offset) {
-    return bar[offset / 4];
+    return (uint32_t)read64(offset);
 }
 
 // Control functions
@@ -57,24 +67,66 @@ uint32_t cpu_get_pc(void) {
     return read32(BAR_PC);
 }
 
-// Memory access
+// Memory access - write pairs of 32-bit words as 64-bit
+// Low word at even index, high word at odd index
+void write_imem_pair(uint32_t even_idx, uint32_t instr_even, uint32_t instr_odd) {
+    uint32_t offset = BAR_IMEM + even_idx * 4;
+    uint64_t val = ((uint64_t)instr_odd << 32) | instr_even;
+    write64(offset, val);
+}
+
 void write_imem(uint32_t word_idx, uint32_t instr) {
-    write32(BAR_IMEM + word_idx * 4, instr);
+    // For single writes, we need to preserve the other word
+    // But since we can't read it back properly, just write the pair
+    // Caller should use write_imem_pair when possible
+    uint32_t offset = BAR_IMEM + (word_idx & ~1) * 4;
+    uint64_t val;
+    if (word_idx & 1) {
+        val = (uint64_t)instr << 32;  // Upper word, lower is 0 (NOP)
+    } else {
+        val = instr;  // Lower word, upper is 0 (NOP)
+    }
+    write64(offset, val);
+}
+
+uint32_t read_imem(uint32_t word_idx) {
+    // Only lower 32 bits are returned, so odd indices won't work
+    uint32_t offset = BAR_IMEM + word_idx * 4;
+    return (uint32_t)read64(offset);
+}
+
+void write_dmem_pair(uint32_t even_idx, uint32_t data_even, uint32_t data_odd) {
+    uint32_t offset = BAR_DMEM + even_idx * 4;
+    uint64_t val = ((uint64_t)data_odd << 32) | data_even;
+    write64(offset, val);
 }
 
 void write_dmem(uint32_t word_idx, uint32_t data) {
-    write32(BAR_DMEM + word_idx * 4, data);
+    uint32_t offset = BAR_DMEM + (word_idx & ~1) * 4;
+    uint64_t val;
+    if (word_idx & 1) {
+        val = (uint64_t)data << 32;
+    } else {
+        val = data;
+    }
+    write64(offset, val);
 }
 
 uint32_t read_dmem(uint32_t word_idx) {
-    return read32(BAR_DMEM + word_idx * 4);
+    uint32_t offset = BAR_DMEM + word_idx * 4;
+    return (uint32_t)read64(offset);
 }
 
 void load_program(const uint32_t *program, size_t count) {
     size_t i;
     printf("Loading %zu instructions...\n", count);
-    for (i = 0; i < count; i++) {
-        write_imem(i, program[i]);
+    // Write pairs of instructions for proper 64-bit alignment
+    for (i = 0; i + 1 < count; i += 2) {
+        write_imem_pair(i, program[i], program[i + 1]);
+    }
+    // Handle odd last instruction (if any)
+    if (i < count) {
+        write_imem_pair(i, program[i], 0x00000013);  // NOP for padding
     }
 }
 
@@ -165,19 +217,20 @@ int vfio_init(const char *pci_addr, int iommu_group) {
            region_info.flags);
 
     // Map BAR0
-    bar = mmap(NULL, bar_size, PROT_READ | PROT_WRITE,
-               MAP_SHARED, device_fd, region_info.offset);
-    if (bar == MAP_FAILED) {
+    bar64 = mmap(NULL, bar_size, PROT_READ | PROT_WRITE,
+                 MAP_SHARED, device_fd, region_info.offset);
+    if (bar64 == MAP_FAILED) {
         perror("Failed to mmap BAR0");
         return -1;
     }
-    printf("Mapped BAR0 at %p\n\n", bar);
+    bar32 = (volatile uint32_t *)bar64;
+    printf("Mapped BAR0 at %p\n\n", bar64);
 
     return 0;
 }
 
 void vfio_cleanup(void) {
-    if (bar) munmap((void *)bar, bar_size);
+    if (bar64) munmap((void *)bar64, bar_size);
     if (device_fd >= 0) close(device_fd);
     if (group_fd >= 0) close(group_fd);
     if (container_fd >= 0) close(container_fd);
@@ -233,7 +286,7 @@ int main(int argc, char *argv[]) {
     printf("Verifying IMEM:\n");
     for (int i = 0; i < 5; i++) {
         printf("  IMEM[%d] = 0x%08X (expected 0x%08X)\n", 
-               i, read32(BAR_IMEM + i*4), test_program[i]);
+               i, read_imem(i), test_program[i]);
     }
 
     // Clear DMEM[0]
