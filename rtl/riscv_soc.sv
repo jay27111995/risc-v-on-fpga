@@ -12,13 +12,13 @@
 //
 // Hazard Handling:
 //   - Data forwarding from MEM and WB stages to EX stage
-//   - Load-use stall: 2 cycles when a load is followed by dependent instruction
+//   - Load-use stall: detected early and registered for clean timing
 //   - Branch penalty: 3 cycles (flush IF/ID/EX when branch taken in MEM)
 //
 // Timing Optimizations for 500MHz:
-//   - Branch resolved in MEM stage (not EX) to break critical path
+//   - Branch resolved in MEM stage (not EX) to break ALU→branch→flush path
+//   - Stall signal registered (early hazard detection) to break stall→enable path
 //   - No forwarding of load data from WB (uses register file bypass + stall)
-//   - Registered pipeline control signals
 //
 // Memory Map (directly mapped to PCIe BAR0):
 //   0x0000-0x00FF  Control registers (64-bit aligned)
@@ -170,17 +170,27 @@ module riscv_soc (
     end
 
     // =========================================================================
-    // Pipeline Hazard Control
+    // Pipeline Hazard Control (Registered for Timing)
     // =========================================================================
+    //
+    // Hazards are detected ONE CYCLE EARLY and registered. This breaks the
+    // critical path from hazard detection through pipeline enables.
+    //
+    // Strategy:
+    //   - Detect load-use hazards when instruction is in ID (before it enters EX)
+    //   - Register the stall signal so it's ready for the next cycle
+    //   - May stall one extra cycle in some cases (conservative but correct)
     
-    logic stall;    // Stall IF and ID (insert bubble in EX)
-    logic flush;    // Flush IF, ID, and EX (branch taken in MEM)
+    logic stall;        // Registered stall signal
+    logic stall_next;   // Combinational next-stall detection
+    logic flush;        // Flush IF, ID, and EX (branch taken in MEM)
     
     // Forward declarations for hazard detection
     logic        ex_mem_read;
     logic        ex_valid;
     logic [4:0]  ex_rd;
     logic [4:0]  id_rs1, id_rs2;
+    logic        id_valid;
     logic        mem_branch_taken;  // Branch resolved in MEM stage
     logic [31:0] mem_branch_target; // Branch target from MEM stage
     logic        mem_mem_read;
@@ -188,15 +198,40 @@ module riscv_soc (
     logic [4:0]  mem_rd;
     logic [4:0]  ex_rs1, ex_rs2;
 
-    // Load-use hazard: stall when EX has a load and ID needs that register
-    wire stall_ex_load = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
-                         ((ex_rd == id_rs1) || (ex_rd == id_rs2));
+    // --- Early Hazard Detection (combinational, will be registered) ---
     
-    // Stall if MEM has a load and EX needs it (load data not available yet)
-    wire stall_mem_load = mem_mem_read && mem_valid && (mem_rd != 5'd0) &&
-                          ((mem_rd == ex_rs1) || (mem_rd == ex_rs2));
+    // Hazard 1: EX will have a load next cycle, and the instruction in ID needs it
+    // Detect: EX has load AND ID has dependent instruction
+    wire hazard_ex_load = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
+                          ((ex_rd == id_rs1) || (ex_rd == id_rs2)) && id_valid;
     
-    assign stall = stall_ex_load || stall_mem_load;
+    // Hazard 2: MEM will have a load next cycle (currently in EX), and ID's instruction will need it
+    // When ID moves to EX, it will need the load result that's currently going EX→MEM
+    // This is detected by: EX has load, and ID reads that register
+    // (Same condition as hazard_ex_load - they overlap, which is fine)
+    
+    // Hazard 3: MEM has load NOW, and EX needs it - must stall this cycle
+    // This one we detect in real-time because EX already has the wrong data
+    wire hazard_mem_load_now = mem_mem_read && mem_valid && (mem_rd != 5'd0) &&
+                               ((mem_rd == ex_rs1) || (mem_rd == ex_rs2)) && ex_valid;
+    
+    // Next cycle's stall prediction (will be registered)
+    assign stall_next = hazard_ex_load;
+    
+    // Register the stall signal for clean timing
+    // Also include immediate MEM hazard detection (can't be predicted earlier)
+    logic stall_reg;
+    always_ff @(posedge clk) begin
+        if (cpu_rst || flush) begin
+            stall_reg <= 1'b0;
+        end else if (cpu_running) begin
+            stall_reg <= stall_next;
+        end
+    end
+    
+    // Final stall: registered prediction OR immediate MEM hazard
+    // The MEM hazard path is shorter (no ALU) so it's acceptable
+    assign stall = stall_reg || hazard_mem_load_now;
     
     // Control hazard: branch taken in MEM, flush IF/ID/EX (3 stages)
     assign flush = mem_branch_taken;
@@ -232,7 +267,7 @@ module riscv_soc (
     
     logic [31:0] id_pc;
     logic [31:0] id_instr;
-    logic        id_valid;
+    // id_valid declared in forward declarations
     
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
