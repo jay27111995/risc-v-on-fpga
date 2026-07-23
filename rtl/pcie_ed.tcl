@@ -523,7 +523,7 @@ proc do_create_pcie_ed {} {
 	set_component_parameter_value core16_pf0_pcie_slot_imp_hwtcl {0}
 	set_component_parameter_value core16_pf0_pme_support_hwtcl {15}
 	set_component_parameter_value core16_pf0_prs_outstanding_capacity_hwtcl {0.0}
-	set_component_parameter_value core16_pf0_revision_id_hwtcl {1}
+	set_component_parameter_value core16_pf0_revision_id_hwtcl {__REVID__}
 	set_component_parameter_value core16_pf0_revision_id_user_hwtcl {0}
 	set_component_parameter_value core16_pf0_rp_rom_bar_enabled_hwtcl {disable}
 	set_component_parameter_value core16_pf0_rp_rom_bar_enabled_hwtcl_f {DISABLE}
