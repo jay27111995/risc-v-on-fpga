@@ -6,14 +6,19 @@
 // Pipeline Stages:
 //   IF  - Instruction Fetch: Read instruction from IMEM
 //   ID  - Instruction Decode: Decode opcode, read register file
-//   EX  - Execute: ALU operation, branch decision
-//   MEM - Memory: Load/store access to DMEM
+//   EX  - Execute: ALU operation, compute branch condition
+//   MEM - Memory: Load/store access to DMEM, branch resolution
 //   WB  - Write Back: Write result to register file
 //
 // Hazard Handling:
 //   - Data forwarding from MEM and WB stages to EX stage
-//   - Load-use stall: 1 cycle when a load is followed by dependent instruction
-//   - Branch penalty: 2 cycles (flush IF/ID and ID/EX on taken branch)
+//   - Load-use stall: 2 cycles when a load is followed by dependent instruction
+//   - Branch penalty: 3 cycles (flush IF/ID/EX when branch taken in MEM)
+//
+// Timing Optimizations for 500MHz:
+//   - Branch resolved in MEM stage (not EX) to break critical path
+//   - No forwarding of load data from WB (uses register file bypass + stall)
+//   - Registered pipeline control signals
 //
 // Memory Map (directly mapped to PCIe BAR0):
 //   0x0000-0x00FF  Control registers (64-bit aligned)
@@ -169,22 +174,21 @@ module riscv_soc (
     // =========================================================================
     
     logic stall;    // Stall IF and ID (insert bubble in EX)
-    logic flush;    // Flush IF/ID and ID/EX (branch misprediction)
+    logic flush;    // Flush IF, ID, and EX (branch taken in MEM)
     
     // Forward declarations for hazard detection
     logic        ex_mem_read;
     logic        ex_valid;
     logic [4:0]  ex_rd;
     logic [4:0]  id_rs1, id_rs2;
-    logic        ex_branch_taken;
+    logic        mem_branch_taken;  // Branch resolved in MEM stage
+    logic [31:0] mem_branch_target; // Branch target from MEM stage
     logic        mem_mem_read;
     logic        mem_valid;
     logic [4:0]  mem_rd;
     logic [4:0]  ex_rs1, ex_rs2;
 
     // Load-use hazard: stall when EX has a load and ID needs that register
-    // For loads in MEM/WB, we stall an extra cycle if dependent instruction needs it
-    // (because we don't forward load data - it goes through register file with bypass)
     wire stall_ex_load = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
                          ((ex_rd == id_rs1) || (ex_rd == id_rs2));
     
@@ -194,8 +198,8 @@ module riscv_soc (
     
     assign stall = stall_ex_load || stall_mem_load;
     
-    // Control hazard: branch taken, flush the two instructions behind it
-    assign flush = ex_branch_taken;
+    // Control hazard: branch taken in MEM, flush IF/ID/EX (3 stages)
+    assign flush = mem_branch_taken;
 
     // =========================================================================
     // Stage 1: IF (Instruction Fetch)
@@ -204,11 +208,8 @@ module riscv_soc (
     logic [31:0] if_pc;             // Current PC
     logic [31:0] if_instr;          // Fetched instruction
     
-    // Branch target from EX stage (forward declaration resolved below)
-    logic [31:0] ex_branch_target;
-    
-    // Next PC selection
-    wire [31:0] if_pc_next = ex_branch_taken ? ex_branch_target : (if_pc + 32'd4);
+    // Next PC selection (branch resolved in MEM stage)
+    wire [31:0] if_pc_next = mem_branch_taken ? mem_branch_target : (if_pc + 32'd4);
     
     // PC register
     always_ff @(posedge clk) begin
@@ -337,18 +338,16 @@ module riscv_soc (
     
     // --- Data Forwarding Logic ---
     // Forward from MEM stage (ALU results, available immediately)
-    // Forward from WB stage (ALU results only, NOT load data - use register file bypass for loads)
+    // Forward from MEM and WB stages
     logic [31:0] mem_alu_result;
     logic        mem_reg_write;
     // mem_mem_read, mem_rd declared in forward declarations
     
-    // wb_mem_read, wb_alu_result declared later in MEM/WB section
-    
-    // Forward from MEM stage
+    // Forward from MEM stage (ALU results available)
     wire fwd_mem_rs1 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs1);
     wire fwd_mem_rs2 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs2);
     
-    // Forward from WB stage - but NOT if WB has load data (creates long timing path)
+    // Forward from WB stage (ALU results only - load data uses stall + regfile bypass)
     wire fwd_wb_rs1 = wb_reg_write && !wb_mem_read && (wb_rd != 5'd0) && (wb_rd == ex_rs1) && !fwd_mem_rs1;
     wire fwd_wb_rs2 = wb_reg_write && !wb_mem_read && (wb_rd != 5'd0) && (wb_rd == ex_rs2) && !fwd_mem_rs2;
     
@@ -377,9 +376,7 @@ module riscv_soc (
         .zero   (ex_alu_zero)
     );
     
-    // Branch decision (BEQ: branch if rs1 == rs2)
-    assign ex_branch_taken  = ex_branch && ex_alu_zero && ex_valid;
-    assign ex_branch_target = ex_pc + ex_imm;
+    // Branch info passed to MEM stage for resolution (breaks timing path)
 
     // =========================================================================
     // EX/MEM Pipeline Register
@@ -387,14 +384,19 @@ module riscv_soc (
     
     logic [31:0] mem_store_data;    // Data to store (forwarded rs2)
     logic        mem_mem_write;
+    logic        mem_branch;        // Branch instruction in MEM
+    logic        mem_alu_zero;      // ALU zero flag for branch comparison
+    logic [31:0] mem_pc;            // PC for branch target calculation
+    logic [31:0] mem_imm;           // Immediate for branch target
     // mem_mem_read, mem_valid, mem_rd declared in forward declarations
     
     always_ff @(posedge clk) begin
-        if (cpu_rst) begin
+        if (cpu_rst || flush) begin
             mem_valid     <= 1'b0;
             mem_reg_write <= 1'b0;
             mem_mem_read  <= 1'b0;
             mem_mem_write <= 1'b0;
+            mem_branch    <= 1'b0;
         end else if (cpu_running) begin
             mem_alu_result <= ex_alu_result;
             mem_store_data <= ex_fwd_rs2;      // Use forwarded value for stores
@@ -402,6 +404,10 @@ module riscv_soc (
             mem_reg_write  <= ex_reg_write;
             mem_mem_read   <= ex_mem_read;
             mem_mem_write  <= ex_mem_write;
+            mem_branch     <= ex_branch && ex_valid;
+            mem_alu_zero   <= ex_alu_zero;
+            mem_pc         <= ex_pc;
+            mem_imm        <= ex_imm;
             mem_valid      <= ex_valid;
         end
     end
@@ -409,6 +415,10 @@ module riscv_soc (
     // =========================================================================
     // Stage 4: MEM (Memory Access)
     // =========================================================================
+    
+    // Branch resolution (moved from EX to break timing path)
+    assign mem_branch_taken  = mem_branch && mem_alu_zero && mem_valid;
+    assign mem_branch_target = mem_pc + mem_imm;
     
     // Connect to DMEM
     assign cpu_dmem_addr  = mem_alu_result;
