@@ -17,7 +17,6 @@ public:
         
         // Initialize all inputs
         dut->clk = 0;
-        dut->cpu_clk = 0;
         dut->rst = 1;
         
         // AXI Master inputs (unused, but need valid values)
@@ -50,18 +49,13 @@ public:
     ~AxiTb() { delete dut; }
     
     void tick() {
-        // Run both clocks together for simplicity
-        // Real hardware has 4:1 ratio but with PCIe latency between writes
         dut->clk = 0;
-        dut->cpu_clk = 0;
         dut->eval();
         dut->clk = 1;
-        dut->cpu_clk = 1;
         dut->eval();
         cycle++;
     }
     
-    // Fast tick - same as tick for now (simplifies testing)
     void fast_tick() {
         tick();
     }

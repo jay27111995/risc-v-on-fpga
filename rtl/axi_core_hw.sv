@@ -3,8 +3,7 @@
 `default_nettype none
 
 module axi_core_hw(
-    input  wire          clk,        // 500MHz AXI clock
-    input  wire          cpu_clk,    // 125MHz CPU clock
+    input  wire          clk,        // 500MHz AXI clock (also used for CPU)
     input  wire          rst,
 
     // AXI Master
@@ -248,8 +247,7 @@ module axi_core_hw(
     axi_lite_s_bvalid = 0;
     case (w_state)
       W_S0: begin
-        // Wait for previous write to complete before accepting new one
-        if (axi_lite_s_awvalid & axi_lite_s_wvalid & ~write_busy) next_w_state = W_S1;
+        if (axi_lite_s_awvalid & axi_lite_s_wvalid) next_w_state = W_S1;
       end
       W_S1: begin
         axi_lite_s_awready = 1;
@@ -294,67 +292,25 @@ module axi_core_hw(
   assign wburst_req_len = 0;
 
   // =========================================================================
-  // Clock Domain Crossing (500MHz AXI -> 125MHz CPU)
-  // For FPGA: cpu_clk is 125MHz from clock_div4x (synchronous to clk)
-  // Since clocks are synchronous (125MHz is derived from 500MHz via /4),
-  // we need to stretch the write pulse to be seen by the slower clock.
+  // Simple single-clock design - CPU runs on AXI clock
+  // The 2-stage pipeline meets timing at 500MHz
   // =========================================================================
   
-  // Forward declaration for AXI backpressure
-  logic write_busy;
-  
-  // Synchronize reset to CPU clock domain (2-stage sync for metastability)
-  logic cpu_rst_n_sync1, cpu_rst_n;
-  always_ff @(posedge cpu_clk) begin
-    cpu_rst_n_sync1 <= ~rst;
-    cpu_rst_n <= cpu_rst_n_sync1;
-  end
-  
-  // Stretch write pulse from 500MHz to 125MHz domain
-  // Hold address/data for 10+ cycles to guarantee cpu_clk sees it
-  // (cpu_clk period = 8 fast clock cycles)
-  // Block new writes until current one completes to avoid data loss
-  logic [3:0] wen_stretch;
-  logic [15:0] latched_waddr;
-  logic [63:0] latched_wdata;
-  
-  assign write_busy = (wen_stretch != 0);
-  
+  // Reset synchronizer
+  logic rst_n_sync1, rst_n_sync;
   always_ff @(posedge clk) begin
-    if (rst) begin
-      wen_stretch <= 0;
-    end else if (bar_wen && !write_busy) begin
-      // Capture address and data, start stretch counter
-      wen_stretch <= 4'd10;  // Hold for 10 fast clocks (>1 cpu_clk period)
-      latched_waddr <= bar_waddr[15:0];
-      latched_wdata <= bar_wdata_captured;
-    end else if (wen_stretch != 0) begin
-      wen_stretch <= wen_stretch - 1;
-    end
+    rst_n_sync1 <= ~rst;
+    rst_n_sync <= rst_n_sync1;
   end
   
-  // Signals to CPU domain
-  logic [15:0] cpu_bar_addr;
-  logic [63:0] cpu_bar_wdata;
-  logic        cpu_bar_wen;
-  logic [63:0] cpu_bar_rdata;
-  
-  // Write enable is high while stretch counter is non-zero
-  assign cpu_bar_wen = (wen_stretch != 0);
-  assign cpu_bar_addr = cpu_bar_wen ? latched_waddr : bar_raddr[15:0];
-  assign cpu_bar_wdata = latched_wdata;
-  
-  // Read data passes back directly
-  assign axi_lite_s_rdata = cpu_bar_rdata;
-
   riscv_soc u_soc(
-    .clk(cpu_clk),
+    .clk(clk),           // Use AXI clock directly
     .clk_en(1'b1),
-    .rst_n(cpu_rst_n),
-    .bar_addr(cpu_bar_addr),
-    .bar_wdata(cpu_bar_wdata),
-    .bar_wen(cpu_bar_wen),
-    .bar_rdata(cpu_bar_rdata)
+    .rst_n(rst_n_sync),
+    .bar_addr(bar_wen ? bar_waddr[15:0] : bar_raddr[15:0]),
+    .bar_wdata(bar_wdata_captured),
+    .bar_wen(bar_wen),
+    .bar_rdata(axi_lite_s_rdata)
   );
 
 endmodule
