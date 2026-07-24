@@ -67,33 +67,55 @@ uint32_t cpu_get_pc(void) {
     return read32(BAR_PC);
 }
 
-// Memory access - SoC only uses lower 32 bits of 64-bit write
-void write_imem(uint32_t word_idx, uint32_t instr) {
-    uint32_t offset = BAR_IMEM + word_idx * 4;
-    write64(offset, instr);  // Upper 32 bits ignored by SoC
-}
-
-uint32_t read_imem(uint32_t word_idx) {
-    uint32_t offset = BAR_IMEM + word_idx * 4;
-    return (uint32_t)read64(offset);
-}
-
-void write_dmem(uint32_t word_idx, uint32_t data) {
-    uint32_t offset = BAR_DMEM + word_idx * 4;
-    write64(offset, data);
-}
-
-uint32_t read_dmem(uint32_t word_idx) {
-    uint32_t offset = BAR_DMEM + word_idx * 4;
-    return (uint32_t)read64(offset);
-}
+// Memory access
+// Hardware writes both 32-bit words from 64-bit data to aligned address
+// So we write pairs: {word1, word0} to even address
 
 void load_program(const uint32_t *program, size_t count) {
     size_t i;
     printf("Loading %zu instructions...\n", count);
-    for (i = 0; i < count; i++) {
-        write_imem(i, program[i]);
+    
+    // Write instruction pairs
+    for (i = 0; i + 1 < count; i += 2) {
+        uint32_t offset = BAR_IMEM + i * 4;
+        uint64_t pair = ((uint64_t)program[i + 1] << 32) | program[i];
+        write64(offset, pair);
     }
+    // Handle odd last instruction (pair with NOP)
+    if (i < count) {
+        uint32_t offset = BAR_IMEM + i * 4;
+        uint64_t pair = ((uint64_t)0x00000013 << 32) | program[i];  // NOP in upper
+        write64(offset, pair);
+    }
+}
+
+uint32_t read_imem(uint32_t word_idx) {
+    uint32_t aligned_offset = BAR_IMEM + (word_idx & ~1) * 4;
+    uint64_t pair = read64(aligned_offset);
+    if (word_idx & 1)
+        return (uint32_t)(pair >> 32);  // Odd: upper 32 bits
+    else
+        return (uint32_t)pair;           // Even: lower 32 bits
+}
+
+void write_dmem(uint32_t word_idx, uint32_t data) {
+    // Must write as pair - read-modify-write
+    uint32_t aligned_offset = BAR_DMEM + (word_idx & ~1) * 4;
+    uint64_t pair = read64(aligned_offset);
+    if (word_idx & 1)
+        pair = (pair & 0xFFFFFFFF) | ((uint64_t)data << 32);
+    else
+        pair = (pair & 0xFFFFFFFF00000000ULL) | data;
+    write64(aligned_offset, pair);
+}
+
+uint32_t read_dmem(uint32_t word_idx) {
+    uint32_t aligned_offset = BAR_DMEM + (word_idx & ~1) * 4;
+    uint64_t pair = read64(aligned_offset);
+    if (word_idx & 1)
+        return (uint32_t)(pair >> 32);  // Odd: upper 32 bits
+    else
+        return (uint32_t)pair;           // Even: lower 32 bits
 }
 
 // VFIO setup
