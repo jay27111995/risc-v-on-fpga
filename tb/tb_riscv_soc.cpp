@@ -82,17 +82,43 @@ public:
         tick();             // Address latched, data captured
         soc->bar_ren = 0;
         tick();             // Data available
-        return soc->bar_rdata;
+        // Return the word requested (even=lower, odd=upper)
+        if (addr & 0x4)
+            return soc->bar_rdata >> 32;
+        else
+            return soc->bar_rdata;
     }
     
-    // ---- IMEM Access ----
+    // ---- IMEM Access (writes pairs) ----
+    void write_imem_pair(uint32_t even_idx, uint32_t word0, uint32_t word1) {
+        uint64_t pair = ((uint64_t)word1 << 32) | word0;
+        bar_write(0x1000 + even_idx * 4, pair);
+    }
+    
     void write_imem(uint32_t word_idx, uint32_t instr) {
-        bar_write(0x1000 + word_idx * 4, instr);
+        // For single writes, pair with NOP
+        uint32_t even_idx = word_idx & ~1;
+        if (word_idx & 1) {
+            write_imem_pair(even_idx, 0x00000013, instr);  // NOP, then instr
+        } else {
+            write_imem_pair(even_idx, instr, 0x00000013);  // instr, then NOP
+        }
     }
     
-    // ---- DMEM Access ----
+    // ---- DMEM Access (writes pairs) ----
+    void write_dmem_pair(uint32_t even_idx, uint32_t word0, uint32_t word1) {
+        uint64_t pair = ((uint64_t)word1 << 32) | word0;
+        bar_write(0x2000 + even_idx * 4, pair);
+    }
+    
     void write_dmem(uint32_t word_idx, uint32_t data) {
-        bar_write(0x2000 + word_idx * 4, data);
+        // For single writes, pair with 0
+        uint32_t even_idx = word_idx & ~1;
+        if (word_idx & 1) {
+            write_dmem_pair(even_idx, 0, data);
+        } else {
+            write_dmem_pair(even_idx, data, 0);
+        }
     }
     
     uint32_t read_dmem(uint32_t word_idx) {
@@ -140,19 +166,15 @@ int main(int argc, char** argv) {
     // ------------------------------------------------------------------------
     printf("Loading test program...\n");
     
-    tb.write_imem(0, 0x00500093);  // ADDI x1, x0, 5
-    tb.write_imem(1, 0x00300113);  // ADDI x2, x0, 3
-    tb.write_imem(2, 0x002081b3);  // ADD  x3, x1, x2
-    tb.write_imem(3, 0x40208233);  // SUB  x4, x1, x2
-    tb.write_imem(4, 0x00302023);  // SW   x3, 0(x0)
-    tb.write_imem(5, 0x00002283);  // LW   x5, 0(x0)
-    tb.write_imem(6, 0x00402303);  // LW   x6, 4(x0)
-    tb.write_imem(7, 0x00000063);  // BEQ  x0, x0, 0
-    
-    // Pre-initialize DMEM[1] for LW test
-    tb.write_dmem(1, 200);
-    
+    // Write instruction pairs
+    tb.write_imem_pair(0, 0x00500093, 0x00300113);  // ADDI x1, x0, 5 | ADDI x2, x0, 3
+    tb.write_imem_pair(2, 0x002081b3, 0x40208233);  // ADD  x3, x1, x2 | SUB  x4, x1, x2
+    tb.write_imem_pair(4, 0x00302023, 0x00002283);  // SW   x3, 0(x0) | LW   x5, 0(x0)
+    tb.write_imem_pair(6, 0x00402303, 0x00000063);  // LW   x6, 4(x0) | BEQ  x0, x0, 0
     printf("  Loaded 8 instructions\n");
+    
+    // Pre-initialize DMEM[1] = 200 for the LW x6, 4(x0) test
+    tb.write_dmem_pair(0, 0, 200);  // DMEM[0]=0, DMEM[1]=200
     printf("  Pre-initialized DMEM[1] = 200\n\n");
     
     // ------------------------------------------------------------------------

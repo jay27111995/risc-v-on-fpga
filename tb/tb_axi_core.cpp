@@ -170,17 +170,19 @@ int main(int argc, char** argv) {
         0x002081b3,  // ADD  x3, x1, x2
         0x00302023,  // SW   x3, 0(x0)
         0x00000063,  // BEQ  x0, x0, 0
+        0x00000013,  // NOP (padding for pair)
     };
-    const int program_size = sizeof(program) / sizeof(program[0]);
+    const int program_size = 5;  // Actual instructions (not padding)
     
     // ------------------------------------------------------------------------
-    // Load Program to IMEM
+    // Load Program to IMEM (write pairs)
     // ------------------------------------------------------------------------
     printf("Loading program to IMEM (via AXI-Lite)...\n");
     
-    for (int i = 0; i < program_size; i++) {
-        if (!tb.axi_write(0x1000 + i * 4, program[i])) {
-            printf("  ERROR: Write to IMEM[%d] timed out!\n", i);
+    for (int i = 0; i < 6; i += 2) {
+        uint64_t pair = ((uint64_t)program[i + 1] << 32) | program[i];
+        if (!tb.axi_write(0x1000 + i * 4, pair)) {
+            printf("  ERROR: Write to IMEM[%d:%d] timed out!\n", i, i+1);
             errors++;
         }
     }
@@ -195,9 +197,10 @@ int main(int argc, char** argv) {
     printf("Verifying IMEM content...\n");
     
     for (int i = 0; i < program_size; i++) {
-        uint64_t readback = tb.axi_read(0x1000 + i * 4);
+        uint64_t raw = tb.axi_read(0x1000 + (i & ~1) * 4);  // Read pair
+        uint32_t readback = (i & 1) ? (raw >> 32) : raw;    // Extract word
         bool match = (readback == program[i]);
-        printf("  IMEM[%d] = 0x%08lX %s\n", i, readback, match ? "OK" : "MISMATCH");
+        printf("  IMEM[%d] = 0x%08X %s\n", i, readback, match ? "OK" : "MISMATCH");
         if (!match) errors++;
     }
     printf("\n");
@@ -229,11 +232,12 @@ int main(int argc, char** argv) {
     
     uint64_t status = tb.axi_read(0x08);
     uint64_t pc = tb.axi_read(0x10);
-    uint64_t dmem0 = tb.axi_read(0x2000);
+    uint64_t dmem_pair = tb.axi_read(0x2000);
+    uint32_t dmem0 = (uint32_t)dmem_pair;  // Even word in lower 32 bits
     
     printf("  STATUS  = 0x%lX\n", status);
     printf("  PC      = 0x%lX\n", pc);
-    printf("  DMEM[0] = %lu (expected 8)\n", dmem0);
+    printf("  DMEM[0] = %u (expected 8)\n", dmem0);
     
     // Verify DMEM[0] = 8
     if (dmem0 != 8) {
