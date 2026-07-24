@@ -264,15 +264,15 @@ module axi_core_hw(
         next_w_state = W_S2;
       end
       W_S2: begin
-        // bar_wen pulse happens here, wait for SoC to register it
+        // bar_wen pulse happens here, wait for SoC ack
         next_w_state = W_S3;
       end
       W_S3: begin
-        // Wait one more cycle for SoC memory write to complete
-        next_w_state = W_S4;
+        // Wait for SoC to acknowledge write completion
+        if (bar_wdone) next_w_state = W_S4;
       end
       W_S4: begin
-        // Now send write response
+        // Send write response
         axi_lite_s_bvalid = 1;
         if (axi_lite_s_bready) next_w_state = W_S5;
       end
@@ -324,6 +324,9 @@ module axi_core_hw(
   // Address mux: use write address during write, read address otherwise
   wire [15:0] bar_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
   
+  // Write done signal from SoC
+  wire bar_wdone;
+  
   riscv_soc u_soc(
     .clk(clk),
     .rst_n(~rst),
@@ -331,7 +334,8 @@ module axi_core_hw(
     .bar_wdata(bar_wdata_captured),
     .bar_wen(bar_wen),
     .bar_ren(bar_ren),
-    .bar_rdata(axi_lite_s_rdata)
+    .bar_rdata(axi_lite_s_rdata),
+    .bar_wdone(bar_wdone)
   );
 
 endmodule

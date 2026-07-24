@@ -43,7 +43,8 @@ module riscv_soc (
     input  logic [63:0] bar_wdata,     // Write data (64-bit)
     input  logic        bar_wen,       // Write enable
     input  logic        bar_ren,       // Read enable (captures read data)
-    output logic [63:0] bar_rdata      // Read data (64-bit)
+    output logic [63:0] bar_rdata,     // Read data (64-bit)
+    output logic        bar_wdone      // Write complete acknowledgment
 );
 
     // =========================================================================
@@ -184,6 +185,28 @@ module riscv_soc (
             dmem[i] = 32'h0;
     end
     
+    // =========================================================================
+    // Write Done Acknowledgment
+    // =========================================================================
+    // bar_wdone pulses high one cycle after the memory write completes.
+    // CTRL writes are immediate (1 cycle), IMEM/DMEM are registered (2 cycles).
+    
+    logic ctrl_wen_r;       // Registered CTRL write enable
+    
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            ctrl_wen_r <= 1'b0;
+        end else begin
+            ctrl_wen_r <= bar_wen && (bar_addr[15:12] == 4'h0);
+        end
+    end
+    
+    // wdone asserts when any write completes:
+    // - CTRL: one cycle after bar_wen (ctrl_wen_r)
+    // - IMEM: one cycle after imem_wen_r (when memory actually written)
+    // - DMEM: one cycle after dmem_host_wen_r (when memory actually written)
+    assign bar_wdone = ctrl_wen_r | imem_wen_r | dmem_host_wen_r;
+
     // =========================================================================
     // BAR Read Multiplexer
     // =========================================================================
