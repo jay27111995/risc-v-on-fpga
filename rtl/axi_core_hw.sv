@@ -237,11 +237,13 @@ module axi_core_hw(
   // Write State Machine:
   //   W_S0: Idle, wait for awvalid && wvalid
   //   W_S1: Assert awready/wready, capture address/data
-  //   W_S2: Assert bvalid, perform write to SoC
-  //   W_S3: Done, return to idle
+  //   W_S2: Assert bar_wen, SoC registers write request
+  //   W_S3: Wait for SoC memory write to complete
+  //   W_S4: Assert bvalid (write response)
+  //   W_S5: Done, return to idle
   //
 
-  typedef enum {W_S0, W_S1, W_S2, W_S3} w_state_t;
+  typedef enum {W_S0, W_S1, W_S2, W_S3, W_S4, W_S5} w_state_t;
   w_state_t next_w_state, w_state;
 
   always_ff @(posedge clk) begin
@@ -262,10 +264,19 @@ module axi_core_hw(
         next_w_state = W_S2;
       end
       W_S2: begin
-        axi_lite_s_bvalid = 1;
-        if (axi_lite_s_bready) next_w_state = W_S3;
+        // bar_wen pulse happens here, wait for SoC to register it
+        next_w_state = W_S3;
       end
-      W_S3: next_w_state = W_S0;
+      W_S3: begin
+        // Wait one more cycle for SoC memory write to complete
+        next_w_state = W_S4;
+      end
+      W_S4: begin
+        // Now send write response
+        axi_lite_s_bvalid = 1;
+        if (axi_lite_s_bready) next_w_state = W_S5;
+      end
+      W_S5: next_w_state = W_S0;
     endcase
   end
 
