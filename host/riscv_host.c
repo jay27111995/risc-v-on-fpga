@@ -82,38 +82,67 @@ void print_debug(void) {
            awaddr, wdata, wstrb, count);
 }
 
-// Memory access - SoC only uses lower 32 bits of 64-bit write
-void write_imem(uint32_t word_idx, uint32_t instr) {
-    uint32_t offset = BAR_IMEM + word_idx * 4;
-    write64(offset, instr);  // Upper 32 bits ignored by SoC
-}
+// Memory access - AXI wrapper splits 64-bit write into two 32-bit SoC writes
+// Host must write 64-bit pairs: {odd_word, even_word}
 
-uint32_t read_imem(uint32_t word_idx) {
-    uint32_t offset = BAR_IMEM + word_idx * 4;
-    return (uint32_t)read64(offset);
-}
-
-void write_dmem(uint32_t word_idx, uint32_t data) {
-    uint32_t offset = BAR_DMEM + word_idx * 4;
+void write_imem_pair(uint32_t pair_idx, uint32_t even_word, uint32_t odd_word) {
+    uint32_t offset = BAR_IMEM + pair_idx * 8;
+    uint64_t data = ((uint64_t)odd_word << 32) | even_word;
     write64(offset, data);
 }
 
+uint32_t read_imem(uint32_t word_idx) {
+    uint32_t offset = BAR_IMEM + (word_idx & ~1) * 4;  // Align to pair
+    uint64_t data = read64(offset);
+    if (word_idx & 1)
+        return (uint32_t)(data >> 32);  // Odd word in upper
+    else
+        return (uint32_t)data;           // Even word in lower
+}
+
+void write_dmem_pair(uint32_t pair_idx, uint32_t even_word, uint32_t odd_word) {
+    uint32_t offset = BAR_DMEM + pair_idx * 8;
+    uint64_t data = ((uint64_t)odd_word << 32) | even_word;
+    write64(offset, data);
+}
+
+void write_dmem(uint32_t word_idx, uint32_t data) {
+    // Read-modify-write to preserve other word in pair
+    uint32_t pair_idx = word_idx / 2;
+    uint32_t offset = BAR_DMEM + pair_idx * 8;
+    uint64_t existing = read64(offset);
+    uint64_t new_data;
+    if (word_idx & 1) {
+        new_data = (existing & 0xFFFFFFFF) | ((uint64_t)data << 32);
+    } else {
+        new_data = (existing & 0xFFFFFFFF00000000ULL) | data;
+    }
+    write64(offset, new_data);
+}
+
 uint32_t read_dmem(uint32_t word_idx) {
-    uint32_t offset = BAR_DMEM + word_idx * 4;
-    return (uint32_t)read64(offset);
+    uint32_t offset = BAR_DMEM + (word_idx & ~1) * 4;  // Align to pair
+    uint64_t data = read64(offset);
+    if (word_idx & 1)
+        return (uint32_t)(data >> 32);  // Odd word in upper
+    else
+        return (uint32_t)data;           // Even word in lower
 }
 
 void test_axi_memory(void) {
     printf("\n=== Testing AXI wrapper test memory (0x200-0x2FF) ===\n");
-    printf("This memory mirrors SoC IMEM: 32-bit writes, 64-bit reads\n\n");
+    printf("64-bit writes split into two 32-bit writes by AXI wrapper\n\n");
     
-    // Test 32-bit writes like IMEM
+    // Test 64-bit pair writes
     uint32_t test_vals[] = {0xDEADBEEF, 0x12345678, 0xCAFEBABE, 0xABCD1234};
     
-    for (int i = 0; i < 4; i++) {
+    // Write pairs
+    for (int i = 0; i < 4; i += 2) {
         uint32_t offset = BAR_TEST_MEM + i * 4;
-        printf("Writing 0x%08X to offset 0x%03X (word %d)\n", test_vals[i], offset, i);
-        write64(offset, test_vals[i]);  // Lower 32 bits
+        uint64_t data = ((uint64_t)test_vals[i+1] << 32) | test_vals[i];
+        printf("Writing pair to 0x%03X: {0x%08X, 0x%08X} = 0x%016lX\n", 
+               offset, test_vals[i], test_vals[i+1], data);
+        write64(offset, data);
         print_debug();
     }
     
@@ -136,10 +165,16 @@ void test_axi_memory(void) {
 
 void load_program(const uint32_t *program, size_t count) {
     size_t i;
-    printf("Loading %zu instructions...\n", count);
-    for (i = 0; i < count; i++) {
-        printf("Writing IMEM[%zu] = 0x%08X to offset 0x%X\n", i, program[i], BAR_IMEM + (uint32_t)i * 4);
-        write_imem(i, program[i]);
+    printf("Loading %zu instructions as pairs...\n", count);
+    for (i = 0; i + 1 < count; i += 2) {
+        printf("Writing IMEM[%zu,%zu] = {0x%08X, 0x%08X}\n", i, i+1, program[i], program[i+1]);
+        write_imem_pair(i / 2, program[i], program[i + 1]);
+        print_debug();
+    }
+    // Handle odd last instruction
+    if (i < count) {
+        printf("Writing IMEM[%zu] = 0x%08X (paired with NOP)\n", i, program[i]);
+        write_imem_pair(i / 2, program[i], 0x00000013);  // NOP
         print_debug();
     }
 }

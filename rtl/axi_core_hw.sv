@@ -192,10 +192,17 @@ module axi_core_hw(
   //   R_S1: Assert arready, capture address
   //   R_S2: Wait one cycle for SoC to register read data
   //   R_S3: Assert rvalid, return data
-  //   R_S4: Done, return to idle
+  //   R_S0: Idle, wait for arvalid
+  //   R_S1: Accept (arready), capture address
+  //   R_S2: Read even word from SoC (bar_ren for addr)
+  //   R_S3: Capture even word result
+  //   R_S4: Read odd word from SoC (bar_ren for addr+4)
+  //   R_S5: Capture odd word result, combine into 64-bit
+  //   R_S6: Return combined data (rvalid)
+  //   R_S7: Done, return to idle
   //
 
-  typedef enum {R_S0, R_S1, R_S2, R_S3, R_S4} r_state_t;
+  typedef enum {R_S0, R_S1, R_S2, R_S3, R_S4, R_S5, R_S6, R_S7} r_state_t;
   r_state_t next_r_state, r_state;
 
   always_ff @(posedge clk) begin
@@ -213,41 +220,62 @@ module axi_core_hw(
         axi_lite_s_arready = 1;
         next_r_state = R_S2;
       end
-      R_S2: next_r_state = R_S3;
-      R_S3: begin
+      R_S2: next_r_state = R_S3;  // Read even word
+      R_S3: next_r_state = R_S4;  // Capture even, setup odd addr
+      R_S4: next_r_state = R_S5;  // Read odd word
+      R_S5: next_r_state = R_S6;  // Capture odd, combine
+      R_S6: begin
         axi_lite_s_rvalid = 1;
-        if (axi_lite_s_rready) next_r_state = R_S4;
+        if (axi_lite_s_rready) next_r_state = R_S7;
       end
-      R_S4: next_r_state = R_S0;
+      R_S7: next_r_state = R_S0;
     endcase
   end
 
   // Capture read address when arvalid first seen
-  logic [21:0] bar_raddr;
+  logic [21:0] bar_raddr_base;
   always_ff @(posedge clk) begin
     if (r_state == R_S0 && axi_lite_s_arvalid) begin
-      bar_raddr <= axi_lite_s_araddr[21:0];
+      bar_raddr_base <= axi_lite_s_araddr[21:0];
     end
   end
+  
+  // Read address: even word in R_S2/R_S3, odd word (addr+4) in R_S4/R_S5
+  wire [21:0] bar_raddr = ((r_state == R_S4) || (r_state == R_S5)) ? 
+                          (bar_raddr_base + 22'd4) : bar_raddr_base;
+  
+  // Capture registers for two sequential reads
+  logic [31:0] rdata_even;
+  logic [31:0] rdata_odd;
 
   // =========================================================================
   // AXI-Lite Slave - Write Channel  
   // =========================================================================
   //
-  // Write State Machine:
+  // Write State Machine - converts 64-bit AXI to two 32-bit SoC writes:
   //   W_S0: Idle, wait for awvalid && wvalid
   //   W_S1: Assert awready/wready, capture address/data
-  //   W_S2: Assert bvalid, perform write to SoC
-  //   W_S3: Done, return to idle
+  //   W_S2: Write even word (lower 32 bits) to SoC
+  //   W_S3: Write odd word (upper 32 bits) to SoC at addr+4
+  //   W_S4: Assert bvalid, wait for bready
+  //   W_S5: Done, return to idle
   //
 
-  typedef enum {W_S0, W_S1, W_S2, W_S3} w_state_t;
+  typedef enum {W_S0, W_S1, W_S2, W_S3, W_S4, W_S5} w_state_t;
   w_state_t next_w_state, w_state;
 
   always_ff @(posedge clk) begin
     if (rst) w_state <= W_S0;
     else w_state <= next_w_state;
   end
+
+  // Write State Machine - converts 64-bit AXI write to two 32-bit SoC writes
+  //   W_S0: Idle, wait for awvalid && wvalid
+  //   W_S1: Assert awready/wready, capture address/data
+  //   W_S2: Write even word (lower 32 bits) to SoC
+  //   W_S3: Write odd word (upper 32 bits) to SoC at addr+4
+  //   W_S4: Assert bvalid, wait for bready
+  //   W_S5: Done, return to idle
 
   always_comb begin
     next_w_state = w_state;
@@ -261,16 +289,18 @@ module axi_core_hw(
         axi_lite_s_wready = 1;
         next_w_state = W_S2;
       end
-      W_S2: begin
+      W_S2: next_w_state = W_S3;  // Write even word
+      W_S3: next_w_state = W_S4;  // Write odd word
+      W_S4: begin
         axi_lite_s_bvalid = 1;
-        if (axi_lite_s_bready) next_w_state = W_S3;
+        if (axi_lite_s_bready) next_w_state = W_S5;
       end
-      W_S3: next_w_state = W_S0;
+      W_S5: next_w_state = W_S0;
     endcase
   end
 
   // Capture address, data, and strobe validity when transaction accepted (W_S1)
-  logic [21:0] bar_waddr;
+  logic [21:0] bar_waddr_base;
   logic [63:0] bar_wdata_captured;
   logic        bar_wstrb_valid;
   
@@ -278,16 +308,22 @@ module axi_core_hw(
     if (rst) begin
       bar_wstrb_valid <= 1'b0;
     end else if (w_state == W_S1) begin
-      bar_waddr <= axi_lite_s_awaddr[21:0];
+      bar_waddr_base <= axi_lite_s_awaddr[21:0];
       bar_wdata_captured <= axi_lite_s_wdata;
       bar_wstrb_valid <= (axi_lite_s_wstrb != 8'h00);
-    end else begin
+    end else if (w_state == W_S5) begin
       bar_wstrb_valid <= 1'b0;
     end
   end
   
-  // Write enable: one-cycle pulse in W_S2 when data is valid
-  wire bar_wen = (w_state == W_S2) && bar_wstrb_valid;
+  // Write address: even word in W_S2, odd word (addr+4) in W_S3
+  wire [21:0] bar_waddr = (w_state == W_S3) ? (bar_waddr_base + 22'd4) : bar_waddr_base;
+  
+  // Write data: lower 32 bits in W_S2, upper 32 bits in W_S3
+  wire [63:0] bar_wdata = (w_state == W_S3) ? {32'b0, bar_wdata_captured[63:32]} : {32'b0, bar_wdata_captured[31:0]};
+  
+  // Write enable: pulse in W_S2 (even) and W_S3 (odd)
+  wire bar_wen = ((w_state == W_S2) || (w_state == W_S3)) && bar_wstrb_valid;
 
   // =========================================================================
   // DMA Burst Interface (unused, directly tied off)
@@ -331,66 +367,90 @@ module axi_core_hw(
   // RISC-V SoC Instance
   // =========================================================================
   
-  // Read enable: asserted in R_S2 when SoC should capture read data
-  wire bar_ren = (r_state == R_S2);
+  // Read enable: asserted in R_S2 (even word) and R_S4 (odd word)
+  wire bar_ren = (r_state == R_S2) || (r_state == R_S4);
   
   // Address mux: use write address during write, read address otherwise
   wire [15:0] bar_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
   
-  // Debug register readback (addresses 0x100-0x11F)
-  wire dbg_read = (bar_raddr[15:8] == 8'h01);
-  
-  logic [63:0] dbg_rdata;
-  always_comb begin
-    case (bar_raddr[4:3])
-      2'd0: dbg_rdata = {42'h0, dbg_last_awaddr};       // 0x100: last AWADDR
-      2'd1: dbg_rdata = dbg_last_wdata;                  // 0x108: last WDATA
-      2'd2: dbg_rdata = {24'h0, dbg_last_wstrb, dbg_write_count}; // 0x110: WSTRB + count
-      default: dbg_rdata = 64'h0;
-    endcase
-  end
-  
   // =========================================================================
-  // Test Memory (addresses 0x200-0x2FF) - mirrors SoC IMEM behavior
-  // 64 x 32-bit words, write uses bar_wdata[31:0], read returns 64-bit
+  // Test Memory (addresses 0x200-0x2FF)
+  // 64 x 32-bit words, write uses bar_wdata[31:0]
   // =========================================================================
   
   logic [31:0] test_mem [0:63];  // 64 x 32-bit = 256 bytes
   logic [31:0] test_mem_rdata;
-  logic [31:0] test_mem_rdata_hi;
   
-  // Test memory write - same as SoC: uses bar_addr[7:2] for 32-bit word index
+  // Test memory write - same as SoC: uses bar_waddr[7:2] for 32-bit word index
   always_ff @(posedge clk) begin
     if (bar_wen && bar_waddr[15:8] == 8'h02) begin
-      test_mem[bar_waddr[7:2]] <= bar_wdata_captured[31:0];
+      test_mem[bar_waddr[7:2]] <= bar_wdata[31:0];
     end
   end
   
-  // Test memory read - returns 64-bit pair like SoC
+  // Test memory read - single 32-bit read per cycle (same as SoC)
   always_ff @(posedge clk) begin
-    if (bar_raddr[15:8] == 8'h02) begin
-      test_mem_rdata    <= test_mem[{bar_raddr[7:3], 1'b0}];  // Even word
-      test_mem_rdata_hi <= test_mem[{bar_raddr[7:3], 1'b1}];  // Odd word
+    if (bar_ren && bar_raddr[15:8] == 8'h02) begin
+      test_mem_rdata <= test_mem[bar_raddr[7:2]];
     end
   end
   
-  wire test_mem_read = (bar_raddr[15:8] == 8'h02);
-  wire [63:0] test_mem_rdata_64 = {test_mem_rdata_hi, test_mem_rdata};
+  // =========================================================================
+  // Debug Registers (addresses 0x100-0x11F)
+  // =========================================================================
   
-  // Mux between debug, test mem, and SoC read data
+  logic [31:0] dbg_rdata;
+  always_comb begin
+    case (bar_raddr[4:2])
+      3'd0: dbg_rdata = dbg_last_awaddr[21:0];           // 0x100: last AWADDR (low)
+      3'd1: dbg_rdata = 32'h0;                           // 0x104: (high, unused)
+      3'd2: dbg_rdata = dbg_last_wdata[31:0];            // 0x108: last WDATA (low)
+      3'd3: dbg_rdata = dbg_last_wdata[63:32];           // 0x10C: last WDATA (high)
+      3'd4: dbg_rdata = dbg_write_count;                 // 0x110: write count
+      3'd5: dbg_rdata = {24'h0, dbg_last_wstrb};         // 0x114: WSTRB
+      default: dbg_rdata = 32'h0;
+    endcase
+  end
+  
+  // =========================================================================
+  // SoC Instance  
+  // =========================================================================
+  
   wire [63:0] soc_rdata;
-  assign axi_lite_s_rdata = dbg_read ? dbg_rdata :
-                            test_mem_read ? test_mem_rdata_64 :
-                            soc_rdata;
+  
+  // Address mux for SoC: write address during write, read address otherwise
+  wire [15:0] bar_addr_soc = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
   
   riscv_soc u_soc(
     .clk(clk),
     .rst_n(~rst),
-    .bar_addr(bar_addr),
-    .bar_wdata(bar_wdata_captured),
+    .bar_addr(bar_addr_soc),
+    .bar_wdata(bar_wdata),
     .bar_wen(bar_wen),
     .bar_ren(bar_ren),
     .bar_rdata(soc_rdata)
   );
+  
+  // =========================================================================
+  // Read Data Mux - select source based on address
+  // =========================================================================
+  
+  wire [31:0] read_data_mux;
+  assign read_data_mux = (bar_raddr[15:8] == 8'h01) ? dbg_rdata :      // 0x100-0x1FF: Debug
+                         (bar_raddr[15:8] == 8'h02) ? test_mem_rdata : // 0x200-0x2FF: Test mem
+                         soc_rdata[31:0];                               // Everything else: SoC
+  
+  // Update capture logic to use the muxed read data
+  always_ff @(posedge clk) begin
+    if (r_state == R_S3) begin
+      rdata_even <= read_data_mux;
+    end
+    if (r_state == R_S5) begin
+      rdata_odd <= read_data_mux;
+    end
+  end
+  
+  // Final AXI read response
+  assign axi_lite_s_rdata = {rdata_odd, rdata_even};
 
 endmodule
