@@ -88,11 +88,25 @@ module riscv_soc (
     logic [31:0] imem_host_rdata;    // Registered read for host access (even word)
     logic [31:0] imem_host_rdata_hi; // Registered read for host access (odd word)
     
-    // Host write port - always writes 64 bits (both words)
+    // Registered write signals for timing
+    logic        imem_wen_r;
+    logic [8:0]  imem_waddr_r;       // Pair index (bar_addr[11:3])
+    logic [31:0] imem_wdata_lo_r;
+    logic [31:0] imem_wdata_hi_r;
+    
+    // Register write request
     always_ff @(posedge clk) begin
-        if (bar_wen && bar_addr[15:12] == 4'h1) begin
-            imem[{bar_addr[11:3], 1'b0}] <= bar_wdata[31:0];   // Even word
-            imem[{bar_addr[11:3], 1'b1}] <= bar_wdata[63:32];  // Odd word
+        imem_wen_r     <= bar_wen && (bar_addr[15:12] == 4'h1);
+        imem_waddr_r   <= bar_addr[11:3];
+        imem_wdata_lo_r <= bar_wdata[31:0];
+        imem_wdata_hi_r <= bar_wdata[63:32];
+    end
+    
+    // Host write port - uses registered signals
+    always_ff @(posedge clk) begin
+        if (imem_wen_r) begin
+            imem[{imem_waddr_r, 1'b0}] <= imem_wdata_lo_r;  // Even word
+            imem[{imem_waddr_r, 1'b1}] <= imem_wdata_hi_r;  // Odd word
         end
     end
     
@@ -125,15 +139,28 @@ module riscv_soc (
     logic        cpu_dmem_we;        // Write enable from MEM stage
     
     // Address indexing
-    wire [10:0] host_dmem_idx = bar_addr[12:2];
-    wire [10:0] cpu_dmem_idx  = cpu_dmem_addr[12:2];
+    wire [10:0] cpu_dmem_idx = cpu_dmem_addr[12:2];
+    
+    // Registered write signals for timing (host port)
+    logic        dmem_host_wen_r;
+    logic [9:0]  dmem_host_waddr_r;  // Pair index (bar_addr[12:3])
+    logic [31:0] dmem_host_wdata_lo_r;
+    logic [31:0] dmem_host_wdata_hi_r;
+    
+    // Register host write request
+    always_ff @(posedge clk) begin
+        dmem_host_wen_r     <= bar_wen && (bar_addr[15:13] == 3'b001);
+        dmem_host_waddr_r   <= bar_addr[12:3];
+        dmem_host_wdata_lo_r <= bar_wdata[31:0];
+        dmem_host_wdata_hi_r <= bar_wdata[63:32];
+    end
     
     // Dual-port memory: host has priority over CPU for writes
     always_ff @(posedge clk) begin
-        if (bar_wen && bar_addr[15:13] == 3'b001) begin
-            // Host write (addresses 0x2000-0x3FFF) - always 64 bits
-            dmem[{bar_addr[12:3], 1'b0}] <= bar_wdata[31:0];   // Even word
-            dmem[{bar_addr[12:3], 1'b1}] <= bar_wdata[63:32];  // Odd word
+        if (dmem_host_wen_r) begin
+            // Host write (registered) - always 64 bits
+            dmem[{dmem_host_waddr_r, 1'b0}] <= dmem_host_wdata_lo_r;  // Even word
+            dmem[{dmem_host_waddr_r, 1'b1}] <= dmem_host_wdata_hi_r;  // Odd word
         end else if (cpu_dmem_we && cpu_running) begin
             // CPU write
             dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
