@@ -270,9 +270,6 @@ module axi_core_hw(
   end
 
   // Capture address, data, and strobe validity when transaction accepted (W_S1)
-  // Handle 64-bit PCIe alignment: WSTRB indicates which 32-bit word is valid
-  //   WSTRB=0x0F: lower 32 bits valid, address unchanged
-  //   WSTRB=0xF0: upper 32 bits valid, address += 4, use upper data
   logic [21:0] bar_waddr;
   logic [63:0] bar_wdata_captured;
   logic        bar_wstrb_valid;
@@ -281,16 +278,8 @@ module axi_core_hw(
     if (rst) begin
       bar_wstrb_valid <= 1'b0;
     end else if (w_state == W_S1) begin
-      // Check which 32-bit word is being written based on WSTRB
-      if (axi_lite_s_wstrb[7:4] != 4'h0) begin
-        // Upper word valid (WSTRB=0xF0): adjust address and use upper data
-        bar_waddr <= axi_lite_s_awaddr[21:0] + 22'd4;
-        bar_wdata_captured <= {32'b0, axi_lite_s_wdata[63:32]};  // Upper to lower
-      end else begin
-        // Lower word valid (WSTRB=0x0F): use as-is
-        bar_waddr <= axi_lite_s_awaddr[21:0];
-        bar_wdata_captured <= axi_lite_s_wdata;
-      end
+      bar_waddr <= axi_lite_s_awaddr[21:0];
+      bar_wdata_captured <= axi_lite_s_wdata;
       bar_wstrb_valid <= (axi_lite_s_wstrb != 8'h00);
     end else begin
       bar_wstrb_valid <= 1'b0;
@@ -315,6 +304,30 @@ module axi_core_hw(
   assign wburst_req_len = 0;
 
   // =========================================================================
+  // Debug Registers - capture last AXI write transaction
+  // =========================================================================
+  
+  logic [21:0] dbg_last_awaddr;
+  logic [63:0] dbg_last_wdata;
+  logic [7:0]  dbg_last_wstrb;
+  logic [31:0] dbg_write_count;
+  
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      dbg_last_awaddr <= 22'h0;
+      dbg_last_wdata <= 64'h0;
+      dbg_last_wstrb <= 8'h0;
+      dbg_write_count <= 32'h0;
+    end else if (w_state == W_S1) begin
+      // Capture raw AXI signals when write is accepted
+      dbg_last_awaddr <= axi_lite_s_awaddr[21:0];
+      dbg_last_wdata <= axi_lite_s_wdata;
+      dbg_last_wstrb <= axi_lite_s_wstrb;
+      dbg_write_count <= dbg_write_count + 1;
+    end
+  end
+
+  // =========================================================================
   // RISC-V SoC Instance
   // =========================================================================
   
@@ -324,6 +337,52 @@ module axi_core_hw(
   // Address mux: use write address during write, read address otherwise
   wire [15:0] bar_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
   
+  // Debug register readback (addresses 0x100-0x11F)
+  wire dbg_read = (bar_raddr[15:8] == 8'h01);
+  
+  logic [63:0] dbg_rdata;
+  always_comb begin
+    case (bar_raddr[4:3])
+      2'd0: dbg_rdata = {42'h0, dbg_last_awaddr};       // 0x100: last AWADDR
+      2'd1: dbg_rdata = dbg_last_wdata;                  // 0x108: last WDATA
+      2'd2: dbg_rdata = {24'h0, dbg_last_wstrb, dbg_write_count}; // 0x110: WSTRB + count
+      default: dbg_rdata = 64'h0;
+    endcase
+  end
+  
+  // =========================================================================
+  // Test Memory (addresses 0x200-0x2FF) - mirrors SoC IMEM behavior
+  // 64 x 32-bit words, write uses bar_wdata[31:0], read returns 64-bit
+  // =========================================================================
+  
+  logic [31:0] test_mem [0:63];  // 64 x 32-bit = 256 bytes
+  logic [31:0] test_mem_rdata;
+  logic [31:0] test_mem_rdata_hi;
+  
+  // Test memory write - same as SoC: uses bar_addr[7:2] for 32-bit word index
+  always_ff @(posedge clk) begin
+    if (bar_wen && bar_waddr[15:8] == 8'h02) begin
+      test_mem[bar_waddr[7:2]] <= bar_wdata_captured[31:0];
+    end
+  end
+  
+  // Test memory read - returns 64-bit pair like SoC
+  always_ff @(posedge clk) begin
+    if (bar_raddr[15:8] == 8'h02) begin
+      test_mem_rdata    <= test_mem[{bar_raddr[7:3], 1'b0}];  // Even word
+      test_mem_rdata_hi <= test_mem[{bar_raddr[7:3], 1'b1}];  // Odd word
+    end
+  end
+  
+  wire test_mem_read = (bar_raddr[15:8] == 8'h02);
+  wire [63:0] test_mem_rdata_64 = {test_mem_rdata_hi, test_mem_rdata};
+  
+  // Mux between debug, test mem, and SoC read data
+  wire [63:0] soc_rdata;
+  assign axi_lite_s_rdata = dbg_read ? dbg_rdata :
+                            test_mem_read ? test_mem_rdata_64 :
+                            soc_rdata;
+  
   riscv_soc u_soc(
     .clk(clk),
     .rst_n(~rst),
@@ -331,7 +390,7 @@ module axi_core_hw(
     .bar_wdata(bar_wdata_captured),
     .bar_wen(bar_wen),
     .bar_ren(bar_ren),
-    .bar_rdata(axi_lite_s_rdata)
+    .bar_rdata(soc_rdata)
   );
 
 endmodule

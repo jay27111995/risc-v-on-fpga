@@ -18,6 +18,10 @@
 #define BAR_RESULT    0x0018   // CPU result
 #define BAR_IMEM      0x1000   // Instruction memory (4KB)
 #define BAR_DMEM      0x2000   // Data memory (8KB)
+#define BAR_DBG_AWADDR 0x100   // Debug: last AWADDR
+#define BAR_DBG_WDATA  0x108   // Debug: last WDATA
+#define BAR_DBG_WSTRB  0x110   // Debug: last WSTRB + write count
+#define BAR_TEST_MEM   0x200   // Test memory (256 bytes)
 
 // Control bits
 #define CTRL_RUN      (1 << 0)
@@ -67,45 +71,76 @@ uint32_t cpu_get_pc(void) {
     return read32(BAR_PC);
 }
 
-// Memory access
-// Writes: Use 64-bit write, AXI wrapper handles WSTRB to route to correct 32-bit word
-// Reads: SoC returns 64 bits (even and odd word), extract based on address bit 2
+// Debug: print last AXI write transaction
+void print_debug(void) {
+    uint64_t awaddr = read64(BAR_DBG_AWADDR);
+    uint64_t wdata = read64(BAR_DBG_WDATA);
+    uint64_t wstrb_cnt = read64(BAR_DBG_WSTRB);
+    uint32_t wstrb = (wstrb_cnt >> 32) & 0xFF;
+    uint32_t count = wstrb_cnt & 0xFFFFFFFF;
+    printf("  DBG: AWADDR=0x%06lX WDATA=0x%016lX WSTRB=0x%02X count=%u\n",
+           awaddr, wdata, wstrb, count);
+}
 
+// Memory access - SoC only uses lower 32 bits of 64-bit write
 void write_imem(uint32_t word_idx, uint32_t instr) {
     uint32_t offset = BAR_IMEM + word_idx * 4;
-    write64(offset, instr);  // AXI wrapper handles WSTRB routing
+    write64(offset, instr);  // Upper 32 bits ignored by SoC
 }
 
 uint32_t read_imem(uint32_t word_idx) {
     uint32_t offset = BAR_IMEM + word_idx * 4;
-    uint64_t data = read64(offset);
-    // PCIe returns aligned pair, extract correct word
-    if (word_idx & 1)
-        return (uint32_t)(data >> 32);  // Odd: upper word
-    else
-        return (uint32_t)data;           // Even: lower word
+    return (uint32_t)read64(offset);
 }
 
 void write_dmem(uint32_t word_idx, uint32_t data) {
     uint32_t offset = BAR_DMEM + word_idx * 4;
-    write64(offset, data);  // AXI wrapper handles WSTRB routing
+    write64(offset, data);
 }
 
 uint32_t read_dmem(uint32_t word_idx) {
     uint32_t offset = BAR_DMEM + word_idx * 4;
-    uint64_t data = read64(offset);
-    // PCIe returns aligned pair, extract correct word
-    if (word_idx & 1)
-        return (uint32_t)(data >> 32);  // Odd: upper word
-    else
-        return (uint32_t)data;           // Even: lower word
+    return (uint32_t)read64(offset);
+}
+
+void test_axi_memory(void) {
+    printf("\n=== Testing AXI wrapper test memory (0x200-0x2FF) ===\n");
+    printf("This memory mirrors SoC IMEM: 32-bit writes, 64-bit reads\n\n");
+    
+    // Test 32-bit writes like IMEM
+    uint32_t test_vals[] = {0xDEADBEEF, 0x12345678, 0xCAFEBABE, 0xABCD1234};
+    
+    for (int i = 0; i < 4; i++) {
+        uint32_t offset = BAR_TEST_MEM + i * 4;
+        printf("Writing 0x%08X to offset 0x%03X (word %d)\n", test_vals[i], offset, i);
+        write64(offset, test_vals[i]);  // Lower 32 bits
+        print_debug();
+    }
+    
+    printf("\nReading back (64-bit reads):\n");
+    for (int i = 0; i < 4; i += 2) {
+        uint32_t offset = BAR_TEST_MEM + i * 4;
+        uint64_t rb = read64(offset);
+        uint32_t even = (uint32_t)rb;
+        uint32_t odd = (uint32_t)(rb >> 32);
+        printf("  [0x%03X] read 0x%016lX -> even=0x%08X (exp 0x%08X) odd=0x%08X (exp 0x%08X)\n",
+               offset, rb, even, test_vals[i], odd, test_vals[i+1]);
+        if (even == test_vals[i] && odd == test_vals[i+1]) {
+            printf("    OK!\n");
+        } else {
+            printf("    FAIL!\n");
+        }
+    }
+    printf("\n");
 }
 
 void load_program(const uint32_t *program, size_t count) {
     size_t i;
     printf("Loading %zu instructions...\n", count);
     for (i = 0; i < count; i++) {
+        printf("Writing IMEM[%zu] = 0x%08X to offset 0x%X\n", i, program[i], BAR_IMEM + (uint32_t)i * 4);
         write_imem(i, program[i]);
+        print_debug();
     }
 }
 
@@ -257,6 +292,9 @@ int main(int argc, char *argv[]) {
     printf("  CTRL after reset: 0x%X\n", read32(BAR_CTRL));
     printf("  STATUS after reset: 0x%X\n", read32(BAR_STATUS));
     printf("  PC after reset: 0x%X\n", cpu_get_pc());
+
+    // Test AXI wrapper memory first
+    test_axi_memory();
 
     // Load program
     load_program(test_program, sizeof(test_program) / sizeof(test_program[0]));

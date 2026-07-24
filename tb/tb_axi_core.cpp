@@ -84,24 +84,12 @@ public:
     }
     
     // AXI-Lite write transaction
-    // Simulates PCIe behavior: 64-bit aligned access with WSTRB indicating valid bytes
-    bool axi_write(uint32_t addr, uint32_t data, int timeout = 100) {
-        // PCIe aligns to 8-byte boundary
-        uint32_t aligned_addr = addr & ~0x7;
-        bool upper_word = (addr & 0x4) != 0;
-        
+    bool axi_write(uint32_t addr, uint64_t data, int timeout = 100) {
         // Address and data phase (can be simultaneous in AXI-Lite)
-        dut->axi_lite_s_awaddr = aligned_addr;
+        dut->axi_lite_s_awaddr = addr;
         dut->axi_lite_s_awvalid = 1;
-        
-        // Place data in correct position with appropriate WSTRB
-        if (upper_word) {
-            dut->axi_lite_s_wdata = ((uint64_t)data << 32);  // Upper 32 bits
-            dut->axi_lite_s_wstrb = 0xF0;  // Upper bytes valid
-        } else {
-            dut->axi_lite_s_wdata = data;  // Lower 32 bits
-            dut->axi_lite_s_wstrb = 0x0F;  // Lower bytes valid
-        }
+        dut->axi_lite_s_wdata = data;
+        dut->axi_lite_s_wstrb = 0xFF;  // All bytes valid
         dut->axi_lite_s_wvalid = 1;
         
         // Wait for handshake
@@ -133,14 +121,9 @@ public:
     }
     
     // AXI-Lite read transaction
-    // Returns 32-bit value from specified address
-    uint32_t axi_read(uint32_t addr, int timeout = 100) {
-        // PCIe aligns to 8-byte boundary
-        uint32_t aligned_addr = addr & ~0x7;
-        bool upper_word = (addr & 0x4) != 0;
-        
+    uint64_t axi_read(uint32_t addr, int timeout = 100) {
         // Address phase
-        dut->axi_lite_s_araddr = aligned_addr;
+        dut->axi_lite_s_araddr = addr;
         dut->axi_lite_s_arvalid = 1;
         
         // Wait for address handshake
@@ -161,12 +144,7 @@ public:
         uint64_t data = dut->axi_lite_s_rdata;
         tick();  // Acknowledge data
         
-        // Extract the correct 32-bit word
-        if (upper_word) {
-            return (uint32_t)(data >> 32);
-        } else {
-            return (uint32_t)data;
-        }
+        return data;
     }
 };
 
@@ -217,9 +195,9 @@ int main(int argc, char** argv) {
     printf("Verifying IMEM content...\n");
     
     for (int i = 0; i < program_size; i++) {
-        uint32_t readback = tb.axi_read(0x1000 + i * 4);
+        uint64_t readback = tb.axi_read(0x1000 + i * 4);
         bool match = (readback == program[i]);
-        printf("  IMEM[%d] = 0x%08X %s\n", i, readback, match ? "OK" : "MISMATCH");
+        printf("  IMEM[%d] = 0x%08lX %s\n", i, readback, match ? "OK" : "MISMATCH");
         if (!match) errors++;
     }
     printf("\n");
@@ -249,13 +227,13 @@ int main(int argc, char** argv) {
     // ------------------------------------------------------------------------
     printf("Results:\n");
     
-    uint32_t status = tb.axi_read(0x08);
-    uint32_t pc = tb.axi_read(0x10);
-    uint32_t dmem0 = tb.axi_read(0x2000);
+    uint64_t status = tb.axi_read(0x08);
+    uint64_t pc = tb.axi_read(0x10);
+    uint64_t dmem0 = tb.axi_read(0x2000);
     
-    printf("  STATUS  = 0x%X\n", status);
-    printf("  PC      = 0x%X\n", pc);
-    printf("  DMEM[0] = %u (expected 8)\n", dmem0);
+    printf("  STATUS  = 0x%lX\n", status);
+    printf("  PC      = 0x%lX\n", pc);
+    printf("  DMEM[0] = %lu (expected 8)\n", dmem0);
     
     // Verify DMEM[0] = 8
     if (dmem0 != 8) {
