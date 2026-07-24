@@ -190,13 +190,12 @@ module axi_core_hw(
   // Read State Machine:
   //   R_S0: Idle, wait for arvalid
   //   R_S1: Assert arready, capture address
-  //   R_S2: Assert bar_ren, SoC captures address and starts read
-  //   R_S3: Wait for SoC read data valid (bar_rdone)
-  //   R_S4: Assert rvalid, return data
-  //   R_S5: Done, return to idle
+  //   R_S2: Wait one cycle for SoC to register read data
+  //   R_S3: Assert rvalid, return data
+  //   R_S4: Done, return to idle
   //
 
-  typedef enum {R_S0, R_S1, R_S2, R_S3, R_S4, R_S5} r_state_t;
+  typedef enum {R_S0, R_S1, R_S2, R_S3, R_S4} r_state_t;
   r_state_t next_r_state, r_state;
 
   always_ff @(posedge clk) begin
@@ -214,16 +213,12 @@ module axi_core_hw(
         axi_lite_s_arready = 1;
         next_r_state = R_S2;
       end
-      R_S2: next_r_state = R_S3;  // bar_ren pulse here
+      R_S2: next_r_state = R_S3;
       R_S3: begin
-        // Wait for SoC to signal read data is valid
-        if (bar_rdone) next_r_state = R_S4;
-      end
-      R_S4: begin
         axi_lite_s_rvalid = 1;
-        if (axi_lite_s_rready) next_r_state = R_S5;
+        if (axi_lite_s_rready) next_r_state = R_S4;
       end
-      R_S5: next_r_state = R_S0;
+      R_S4: next_r_state = R_S0;
     endcase
   end
 
@@ -242,13 +237,11 @@ module axi_core_hw(
   // Write State Machine:
   //   W_S0: Idle, wait for awvalid && wvalid
   //   W_S1: Assert awready/wready, capture address/data
-  //   W_S2: Assert bar_wen, SoC registers write request
-  //   W_S3: Wait for SoC memory write to complete
-  //   W_S4: Assert bvalid (write response)
-  //   W_S5: Done, return to idle
+  //   W_S2: Assert bvalid, perform write to SoC
+  //   W_S3: Done, return to idle
   //
 
-  typedef enum {W_S0, W_S1, W_S2, W_S3, W_S4, W_S5} w_state_t;
+  typedef enum {W_S0, W_S1, W_S2, W_S3} w_state_t;
   w_state_t next_w_state, w_state;
 
   always_ff @(posedge clk) begin
@@ -269,23 +262,17 @@ module axi_core_hw(
         next_w_state = W_S2;
       end
       W_S2: begin
-        // bar_wen pulse happens here, wait for SoC ack
-        next_w_state = W_S3;
-      end
-      W_S3: begin
-        // Wait for SoC to acknowledge write completion
-        if (bar_wdone) next_w_state = W_S4;
-      end
-      W_S4: begin
-        // Send write response
         axi_lite_s_bvalid = 1;
-        if (axi_lite_s_bready) next_w_state = W_S5;
+        if (axi_lite_s_bready) next_w_state = W_S3;
       end
-      W_S5: next_w_state = W_S0;
+      W_S3: next_w_state = W_S0;
     endcase
   end
 
   // Capture address, data, and strobe validity when transaction accepted (W_S1)
+  // Handle 64-bit PCIe alignment: WSTRB indicates which 32-bit word is valid
+  //   WSTRB=0x0F: lower 32 bits valid, address unchanged
+  //   WSTRB=0xF0: upper 32 bits valid, address += 4, use upper data
   logic [21:0] bar_waddr;
   logic [63:0] bar_wdata_captured;
   logic        bar_wstrb_valid;
@@ -294,8 +281,16 @@ module axi_core_hw(
     if (rst) begin
       bar_wstrb_valid <= 1'b0;
     end else if (w_state == W_S1) begin
-      bar_waddr <= axi_lite_s_awaddr[21:0];
-      bar_wdata_captured <= axi_lite_s_wdata;
+      // Check which 32-bit word is being written based on WSTRB
+      if (axi_lite_s_wstrb[7:4] != 4'h0) begin
+        // Upper word valid (WSTRB=0xF0): adjust address and use upper data
+        bar_waddr <= axi_lite_s_awaddr[21:0] + 22'd4;
+        bar_wdata_captured <= {32'b0, axi_lite_s_wdata[63:32]};  // Upper to lower
+      end else begin
+        // Lower word valid (WSTRB=0x0F): use as-is
+        bar_waddr <= axi_lite_s_awaddr[21:0];
+        bar_wdata_captured <= axi_lite_s_wdata;
+      end
       bar_wstrb_valid <= (axi_lite_s_wstrb != 8'h00);
     end else begin
       bar_wstrb_valid <= 1'b0;
@@ -329,10 +324,6 @@ module axi_core_hw(
   // Address mux: use write address during write, read address otherwise
   wire [15:0] bar_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
   
-  // Handshake signals from SoC
-  wire bar_wdone;
-  wire bar_rdone;
-  
   riscv_soc u_soc(
     .clk(clk),
     .rst_n(~rst),
@@ -340,9 +331,7 @@ module axi_core_hw(
     .bar_wdata(bar_wdata_captured),
     .bar_wen(bar_wen),
     .bar_ren(bar_ren),
-    .bar_rdata(axi_lite_s_rdata),
-    .bar_wdone(bar_wdone),
-    .bar_rdone(bar_rdone)
+    .bar_rdata(axi_lite_s_rdata)
   );
 
 endmodule
