@@ -43,9 +43,7 @@ module riscv_soc (
     input  logic [63:0] bar_wdata,     // Write data (64-bit)
     input  logic        bar_wen,       // Write enable
     input  logic        bar_ren,       // Read enable (captures read data)
-    output logic [63:0] bar_rdata,     // Read data (64-bit)
-    output logic        bar_wdone,     // Write complete acknowledgment
-    output logic        bar_rdone      // Read data valid acknowledgment
+    output logic [63:0] bar_rdata      // Read data (64-bit)
 );
 
     // =========================================================================
@@ -90,29 +88,14 @@ module riscv_soc (
     logic [31:0] imem_host_rdata;    // Registered read for host access (even word)
     logic [31:0] imem_host_rdata_hi; // Registered read for host access (odd word)
     
-    // Registered write signals for timing
-    logic        imem_wen_r;
-    logic [8:0]  imem_waddr_r;       // Pair index (bar_addr[11:3])
-    logic [31:0] imem_wdata_lo_r;
-    logic [31:0] imem_wdata_hi_r;
-    
-    // Register write request
+    // Host write port
     always_ff @(posedge clk) begin
-        imem_wen_r     <= bar_wen && (bar_addr[15:12] == 4'h1);
-        imem_waddr_r   <= bar_addr[11:3];
-        imem_wdata_lo_r <= bar_wdata[31:0];
-        imem_wdata_hi_r <= bar_wdata[63:32];
-    end
-    
-    // Host write port - uses registered signals
-    always_ff @(posedge clk) begin
-        if (imem_wen_r) begin
-            imem[{imem_waddr_r, 1'b0}] <= imem_wdata_lo_r;  // Even word
-            imem[{imem_waddr_r, 1'b1}] <= imem_wdata_hi_r;  // Odd word
+        if (bar_wen && bar_addr[15:12] == 4'h1) begin
+            imem[bar_addr[11:2]] <= bar_wdata[31:0];
         end
     end
     
-    // Host read port - returns 64 bits (both words)
+    // Host read port - returns 64 bits (even and odd word for PCIe alignment)
     always_ff @(posedge clk) begin
         if (bar_ren && bar_addr[15:12] == 4'h1) begin
             imem_host_rdata    <= imem[{bar_addr[11:3], 1'b0}];  // Even word
@@ -141,28 +124,13 @@ module riscv_soc (
     logic        cpu_dmem_we;        // Write enable from MEM stage
     
     // Address indexing
-    wire [10:0] cpu_dmem_idx = cpu_dmem_addr[12:2];
-    
-    // Registered write signals for timing (host port)
-    logic        dmem_host_wen_r;
-    logic [9:0]  dmem_host_waddr_r;  // Pair index (bar_addr[12:3])
-    logic [31:0] dmem_host_wdata_lo_r;
-    logic [31:0] dmem_host_wdata_hi_r;
-    
-    // Register host write request
-    always_ff @(posedge clk) begin
-        dmem_host_wen_r     <= bar_wen && (bar_addr[15:13] == 3'b001);
-        dmem_host_waddr_r   <= bar_addr[12:3];
-        dmem_host_wdata_lo_r <= bar_wdata[31:0];
-        dmem_host_wdata_hi_r <= bar_wdata[63:32];
-    end
+    wire [10:0] cpu_dmem_idx  = cpu_dmem_addr[12:2];
     
     // Dual-port memory: host has priority over CPU for writes
     always_ff @(posedge clk) begin
-        if (dmem_host_wen_r) begin
-            // Host write (registered) - always 64 bits
-            dmem[{dmem_host_waddr_r, 1'b0}] <= dmem_host_wdata_lo_r;  // Even word
-            dmem[{dmem_host_waddr_r, 1'b1}] <= dmem_host_wdata_hi_r;  // Odd word
+        if (bar_wen && bar_addr[15:13] == 3'b001) begin
+            // Host write (addresses 0x2000-0x3FFF)
+            dmem[bar_addr[12:2]] <= bar_wdata[31:0];
         end else if (cpu_dmem_we && cpu_running) begin
             // CPU write
             dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
@@ -172,7 +140,7 @@ module riscv_soc (
     // CPU read port (combinational for same-cycle read in MEM stage)
     assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
-    // Host read port - returns 64 bits (both words)
+    // Host read port - returns 64 bits (even and odd word for PCIe alignment)
     always_ff @(posedge clk) begin
         if (bar_ren && bar_addr[15:13] == 3'b001) begin
             dmem_host_rdata    <= dmem[{bar_addr[12:3], 1'b0}];  // Even word
@@ -187,79 +155,26 @@ module riscv_soc (
     end
     
     // =========================================================================
-    // Write Done Acknowledgment
+    // BAR Read Multiplexer
     // =========================================================================
-    // bar_wdone pulses high one cycle after the memory write completes.
-    // CTRL writes are immediate (1 cycle), IMEM/DMEM are registered (2 cycles).
-    
-    logic ctrl_wen_r;       // Registered CTRL write enable
-    
-    always_ff @(posedge clk) begin
-        if (!rst_n) begin
-            ctrl_wen_r <= 1'b0;
-        end else begin
-            ctrl_wen_r <= bar_wen && (bar_addr[15:12] == 4'h0);
-        end
-    end
-    
-    // wdone asserts when any write completes:
-    // - CTRL: one cycle after bar_wen (ctrl_wen_r)
-    // - IMEM: one cycle after imem_wen_r (when memory actually written)
-    // - DMEM: one cycle after dmem_host_wen_r (when memory actually written)
-    assign bar_wdone = ctrl_wen_r | imem_wen_r | dmem_host_wen_r;
-
-    // =========================================================================
-    // BAR Read Done Acknowledgment
-    // =========================================================================
-    // bar_rdone pulses one cycle after bar_ren, when bar_rdata is valid.
-    // Read path: bar_ren → IMEM/DMEM capture → bar_rdata_comb → bar_rdata (registered)
-    // So rdone needs to be 2 cycles after bar_ren.
-    
-    logic bar_ren_r1, bar_ren_r2;
-    
-    always_ff @(posedge clk) begin
-        if (!rst_n) begin
-            bar_ren_r1 <= 1'b0;
-            bar_ren_r2 <= 1'b0;
-        end else begin
-            bar_ren_r1 <= bar_ren;
-            bar_ren_r2 <= bar_ren_r1;
-        end
-    end
-    
-    assign bar_rdone = bar_ren_r2;
-
-    // =========================================================================
-    // BAR Read Multiplexer (Registered Output for Timing)
-    // =========================================================================
-    
-    logic [63:0] bar_rdata_comb;
     
     always_comb begin
-        bar_rdata_comb = 64'h0;
+        bar_rdata = 64'h0;
         
         case (bar_addr[15:12])
             4'h0: begin  // Control registers
                 case (bar_addr[7:3])
-                    5'd0: bar_rdata_comb = {62'b0, ctrl_reset, ctrl_run};  // CTRL
-                    5'd1: bar_rdata_comb = {63'b0, cpu_running};           // STATUS
-                    5'd2: bar_rdata_comb = {32'b0, cpu_pc};                // PC
-                    5'd3: bar_rdata_comb = {32'b0, cpu_result};            // RESULT
-                    default: bar_rdata_comb = 64'h0;
+                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};  // CTRL
+                    5'd1: bar_rdata = {63'b0, cpu_running};           // STATUS
+                    5'd2: bar_rdata = {32'b0, cpu_pc};                // PC
+                    5'd3: bar_rdata = {32'b0, cpu_result};            // RESULT
+                    default: bar_rdata = 64'h0;
                 endcase
             end
-            4'h1:        bar_rdata_comb = {imem_host_rdata_hi, imem_host_rdata};  // IMEM (64-bit)
-            4'h2, 4'h3:  bar_rdata_comb = {dmem_host_rdata_hi, dmem_host_rdata};  // DMEM (64-bit)
-            default:     bar_rdata_comb = 64'h0;
+            4'h1:        bar_rdata = {imem_host_rdata_hi, imem_host_rdata};  // IMEM (64-bit)
+            4'h2, 4'h3:  bar_rdata = {dmem_host_rdata_hi, dmem_host_rdata};  // DMEM (64-bit)
+            default:     bar_rdata = 64'h0;
         endcase
-    end
-    
-    // Register the output for timing closure
-    always_ff @(posedge clk) begin
-        if (!rst_n)
-            bar_rdata <= 64'h0;
-        else
-            bar_rdata <= bar_rdata_comb;
     end
 
     // =========================================================================
