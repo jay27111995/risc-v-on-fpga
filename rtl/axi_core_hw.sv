@@ -190,12 +190,13 @@ module axi_core_hw(
   // Read State Machine:
   //   R_S0: Idle, wait for arvalid
   //   R_S1: Assert arready, capture address
-  //   R_S2: Wait one cycle for SoC to register read data
-  //   R_S3: Assert rvalid, return data
-  //   R_S4: Done, return to idle
+  //   R_S2: Assert bar_ren, SoC captures address and starts read
+  //   R_S3: Wait for SoC read data valid (bar_rdone)
+  //   R_S4: Assert rvalid, return data
+  //   R_S5: Done, return to idle
   //
 
-  typedef enum {R_S0, R_S1, R_S2, R_S3, R_S4} r_state_t;
+  typedef enum {R_S0, R_S1, R_S2, R_S3, R_S4, R_S5} r_state_t;
   r_state_t next_r_state, r_state;
 
   always_ff @(posedge clk) begin
@@ -213,12 +214,16 @@ module axi_core_hw(
         axi_lite_s_arready = 1;
         next_r_state = R_S2;
       end
-      R_S2: next_r_state = R_S3;
+      R_S2: next_r_state = R_S3;  // bar_ren pulse here
       R_S3: begin
-        axi_lite_s_rvalid = 1;
-        if (axi_lite_s_rready) next_r_state = R_S4;
+        // Wait for SoC to signal read data is valid
+        if (bar_rdone) next_r_state = R_S4;
       end
-      R_S4: next_r_state = R_S0;
+      R_S4: begin
+        axi_lite_s_rvalid = 1;
+        if (axi_lite_s_rready) next_r_state = R_S5;
+      end
+      R_S5: next_r_state = R_S0;
     endcase
   end
 
@@ -324,8 +329,9 @@ module axi_core_hw(
   // Address mux: use write address during write, read address otherwise
   wire [15:0] bar_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
   
-  // Write done signal from SoC
+  // Handshake signals from SoC
   wire bar_wdone;
+  wire bar_rdone;
   
   riscv_soc u_soc(
     .clk(clk),
@@ -335,7 +341,8 @@ module axi_core_hw(
     .bar_wen(bar_wen),
     .bar_ren(bar_ren),
     .bar_rdata(axi_lite_s_rdata),
-    .bar_wdone(bar_wdone)
+    .bar_wdone(bar_wdone),
+    .bar_rdone(bar_rdone)
   );
 
 endmodule
