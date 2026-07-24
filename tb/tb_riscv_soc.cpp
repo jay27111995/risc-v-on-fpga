@@ -96,13 +96,7 @@ public:
     }
     
     uint32_t read_dmem(uint32_t word_idx) {
-        uint64_t data = bar_read(0x2000 + word_idx * 4);
-        // Extract correct 32-bit word based on address alignment
-        if (word_idx & 1) {
-            return static_cast<uint32_t>(data >> 32);  // Odd index: upper word
-        } else {
-            return static_cast<uint32_t>(data);         // Even index: lower word
-        }
+        return static_cast<uint32_t>(bar_read(0x2000 + word_idx * 4));
     }
     
     // ---- Control Registers ----

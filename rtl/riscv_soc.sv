@@ -85,8 +85,7 @@ module riscv_soc (
     // =========================================================================
     
     logic [31:0] imem [0:1023];      // 1024 x 32-bit = 4KB
-    logic [31:0] imem_host_rdata;    // Registered read for host access (even word)
-    logic [31:0] imem_host_rdata_hi; // Registered read for host access (odd word)
+    logic [31:0] imem_host_rdata;    // Registered read for host access
     
     // Host write port
     always_ff @(posedge clk) begin
@@ -95,11 +94,10 @@ module riscv_soc (
         end
     end
     
-    // Host read port - returns 64 bits (even and odd word for PCIe alignment)
+    // Host read port (registered, only capture when read enable)
     always_ff @(posedge clk) begin
         if (bar_ren && bar_addr[15:12] == 4'h1) begin
-            imem_host_rdata    <= imem[{bar_addr[11:3], 1'b0}];  // Even word
-            imem_host_rdata_hi <= imem[{bar_addr[11:3], 1'b1}];  // Odd word
+            imem_host_rdata <= imem[bar_addr[11:2]];
         end
     end
     
@@ -114,8 +112,7 @@ module riscv_soc (
     // =========================================================================
     
     logic [31:0] dmem [0:2047];      // 2048 x 32-bit = 8KB
-    logic [31:0] dmem_host_rdata;    // Registered read for host access (even word)
-    logic [31:0] dmem_host_rdata_hi; // Registered read for host access (odd word)
+    logic [31:0] dmem_host_rdata;    // Registered read for host access
     
     // CPU port signals
     logic [31:0] cpu_dmem_addr;      // Address from MEM stage
@@ -124,13 +121,14 @@ module riscv_soc (
     logic        cpu_dmem_we;        // Write enable from MEM stage
     
     // Address indexing
+    wire [10:0] host_dmem_idx = bar_addr[12:2];
     wire [10:0] cpu_dmem_idx  = cpu_dmem_addr[12:2];
     
     // Dual-port memory: host has priority over CPU for writes
     always_ff @(posedge clk) begin
         if (bar_wen && bar_addr[15:13] == 3'b001) begin
             // Host write (addresses 0x2000-0x3FFF)
-            dmem[bar_addr[12:2]] <= bar_wdata[31:0];
+            dmem[host_dmem_idx] <= bar_wdata[31:0];
         end else if (cpu_dmem_we && cpu_running) begin
             // CPU write
             dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
@@ -140,11 +138,10 @@ module riscv_soc (
     // CPU read port (combinational for same-cycle read in MEM stage)
     assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
-    // Host read port - returns 64 bits (even and odd word for PCIe alignment)
+    // Host read port (registered, only capture when read enable)
     always_ff @(posedge clk) begin
         if (bar_ren && bar_addr[15:13] == 3'b001) begin
-            dmem_host_rdata    <= dmem[{bar_addr[12:3], 1'b0}];  // Even word
-            dmem_host_rdata_hi <= dmem[{bar_addr[12:3], 1'b1}];  // Odd word
+            dmem_host_rdata <= dmem[host_dmem_idx];
         end
     end
     
@@ -171,8 +168,8 @@ module riscv_soc (
                     default: bar_rdata = 64'h0;
                 endcase
             end
-            4'h1:        bar_rdata = {imem_host_rdata_hi, imem_host_rdata};  // IMEM (64-bit)
-            4'h2, 4'h3:  bar_rdata = {dmem_host_rdata_hi, dmem_host_rdata};  // DMEM (64-bit)
+            4'h1:        bar_rdata = {32'b0, imem_host_rdata};  // IMEM
+            4'h2, 4'h3:  bar_rdata = {32'b0, dmem_host_rdata};  // DMEM
             default:     bar_rdata = 64'h0;
         endcase
     end
