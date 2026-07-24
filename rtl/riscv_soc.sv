@@ -72,8 +72,8 @@ module riscv_soc (
             if (ctrl_reset)
                 ctrl_reset <= 1'b0;
             
-            // Write to CTRL register at offset 0x00
-            if (bar_wen && bar_addr[15:12] == 4'h0 && bar_addr[7:3] == 5'd0) begin
+            // Write to CTRL register at offset 0x00 only (not 0x04)
+            if (bar_wen && bar_addr[15:12] == 4'h0 && bar_addr[7:2] == 6'd0) begin
                 ctrl_run   <= bar_wdata[0];
                 ctrl_reset <= bar_wdata[1];
             end
@@ -94,7 +94,7 @@ module riscv_soc (
         end
     end
     
-    // Host read port (registered, only capture when read enable)
+    // Host read port (registered, single 32-bit word)
     always_ff @(posedge clk) begin
         if (bar_ren && bar_addr[15:12] == 4'h1) begin
             imem_host_rdata <= imem[bar_addr[11:2]];
@@ -121,14 +121,13 @@ module riscv_soc (
     logic        cpu_dmem_we;        // Write enable from MEM stage
     
     // Address indexing
-    wire [10:0] host_dmem_idx = bar_addr[12:2];
     wire [10:0] cpu_dmem_idx  = cpu_dmem_addr[12:2];
     
     // Dual-port memory: host has priority over CPU for writes
     always_ff @(posedge clk) begin
         if (bar_wen && bar_addr[15:13] == 3'b001) begin
             // Host write (addresses 0x2000-0x3FFF)
-            dmem[host_dmem_idx] <= bar_wdata[31:0];
+            dmem[bar_addr[12:2]] <= bar_wdata[31:0];
         end else if (cpu_dmem_we && cpu_running) begin
             // CPU write
             dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
@@ -138,10 +137,10 @@ module riscv_soc (
     // CPU read port (combinational for same-cycle read in MEM stage)
     assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
-    // Host read port (registered, only capture when read enable)
+    // Host read port (registered, single 32-bit word)
     always_ff @(posedge clk) begin
         if (bar_ren && bar_addr[15:13] == 3'b001) begin
-            dmem_host_rdata <= dmem[host_dmem_idx];
+            dmem_host_rdata <= dmem[bar_addr[12:2]];
         end
     end
     
@@ -168,8 +167,8 @@ module riscv_soc (
                     default: bar_rdata = 64'h0;
                 endcase
             end
-            4'h1:        bar_rdata = {32'b0, imem_host_rdata};  // IMEM
-            4'h2, 4'h3:  bar_rdata = {32'b0, dmem_host_rdata};  // DMEM
+            4'h1:        bar_rdata = {32'b0, imem_host_rdata};  // IMEM (32-bit)
+            4'h2, 4'h3:  bar_rdata = {32'b0, dmem_host_rdata};  // DMEM (32-bit)
             default:     bar_rdata = 64'h0;
         endcase
     end
