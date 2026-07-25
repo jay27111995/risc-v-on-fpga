@@ -128,19 +128,29 @@ module riscv_soc (
     logic [31:0] dbg_cpu_dmem_wdata;
     logic [31:0] dbg_cpu_dmem_count;
     
-    // Dual-port memory: host has priority over CPU for writes
+    // DMEM write enable signals
+    wire host_dmem_wen = bar_wen && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3);
+    wire cpu_dmem_wen = cpu_dmem_we && cpu_running && !host_dmem_wen;
+    
+    // Muxed write address and data
+    wire [10:0] dmem_waddr = host_dmem_wen ? bar_addr[12:2] : cpu_dmem_idx;
+    wire [31:0] dmem_wdata = host_dmem_wen ? bar_wdata[31:0] : cpu_dmem_wdata;
+    wire        dmem_wen   = host_dmem_wen || cpu_dmem_wen;
+    
+    // Single write port for DMEM
+    always_ff @(posedge clk) begin
+        if (dmem_wen) begin
+            dmem[dmem_waddr] <= dmem_wdata;
+        end
+    end
+    
+    // Debug capture (separate from memory write)
     always_ff @(posedge clk) begin
         if (~rst_n) begin
             dbg_cpu_dmem_addr <= 32'h0;
             dbg_cpu_dmem_wdata <= 32'h0;
             dbg_cpu_dmem_count <= 32'h0;
-        end else if (bar_wen && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3)) begin
-            // Host write (addresses 0x2000-0x3FFF)
-            dmem[bar_addr[12:2]] <= bar_wdata[31:0];
-        end else if (cpu_dmem_we && cpu_running) begin
-            // CPU write
-            dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
-            // Debug capture
+        end else if (cpu_dmem_wen) begin
             dbg_cpu_dmem_addr <= cpu_dmem_addr;
             dbg_cpu_dmem_wdata <= cpu_dmem_wdata;
             dbg_cpu_dmem_count <= dbg_cpu_dmem_count + 1;
@@ -150,23 +160,11 @@ module riscv_soc (
     // CPU read port (combinational for same-cycle read in MEM stage)
     assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
-    // Debug: count DMEM host reads
-    logic [31:0] dbg_dmem_read_count;
-    logic [31:0] dbg_dmem_read_addr;
-    logic [31:0] dbg_dmem_read_data;
-    
     // Host read port (registered, single 32-bit word)
     // DMEM is at 0x2000-0x3FFF (bar_addr[15:12] = 4'h2 or 4'h3)
     always_ff @(posedge clk) begin
-        if (~rst_n) begin
-            dbg_dmem_read_count <= 32'h0;
-            dbg_dmem_read_addr <= 32'h0;
-            dbg_dmem_read_data <= 32'h0;
-        end else if (bar_ren && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3)) begin
+        if (bar_ren && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3)) begin
             dmem_host_rdata <= dmem[bar_addr[12:2]];
-            dbg_dmem_read_count <= dbg_dmem_read_count + 1;
-            dbg_dmem_read_addr <= {16'h0, bar_addr};
-            dbg_dmem_read_data <= dmem[bar_addr[12:2]];
         end
     end
     
@@ -193,9 +191,6 @@ module riscv_soc (
                     5'd4: bar_rdata = {32'b0, dbg_cpu_dmem_addr};     // 0x20: DBG_CPU_ADDR
                     5'd5: bar_rdata = {32'b0, dbg_cpu_dmem_wdata};    // 0x28: DBG_CPU_WDATA
                     5'd6: bar_rdata = {32'b0, dbg_cpu_dmem_count};    // 0x30: DBG_CPU_COUNT
-                    5'd7: bar_rdata = {32'b0, dbg_dmem_read_count};   // 0x38: DBG_DMEM_RD_COUNT
-                    5'd8: bar_rdata = {32'b0, dbg_dmem_read_addr};    // 0x40: DBG_DMEM_RD_ADDR
-                    5'd9: bar_rdata = {32'b0, dbg_dmem_read_data};    // 0x48: DBG_DMEM_RD_DATA
                     default: bar_rdata = 64'h0;
                 endcase
             end
