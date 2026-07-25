@@ -126,28 +126,33 @@ module riscv_soc (
     logic [31:0] dbg_cpu_dmem_wdata;
     logic [31:0] dbg_cpu_dmem_count;
     
-    // DMEM write enable signals
+    // DMEM write - single write port with muxed address/data
+    // Host has priority over CPU
     wire host_dmem_wen = bar_wen && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3);
     wire cpu_dmem_wen = cpu_dmem_we && cpu_running && !host_dmem_wen;
+    wire dmem_wen = host_dmem_wen || cpu_dmem_wen;
     
-    // Single write port for DMEM with debug capture
+    // Mux address and data based on who is writing
+    wire [10:0] dmem_waddr = host_dmem_wen ? bar_addr[12:2] : cpu_dmem_idx;
+    wire [31:0] dmem_wdata = host_dmem_wen ? bar_wdata[31:0] : cpu_dmem_wdata;
+    
+    // Single write port for DMEM
+    always_ff @(posedge clk) begin
+        if (dmem_wen) begin
+            dmem[dmem_waddr] <= dmem_wdata;
+        end
+    end
+    
+    // Debug capture for CPU writes (separate always_ff)
     always_ff @(posedge clk) begin
         if (~rst_n) begin
             dbg_cpu_dmem_addr <= 32'h0;
             dbg_cpu_dmem_wdata <= 32'h0;
             dbg_cpu_dmem_count <= 32'h0;
-        end else begin
-            // Host DMEM write
-            if (host_dmem_wen) begin
-                dmem[bar_addr[12:2]] <= bar_wdata[31:0];
-            end
-            // CPU DMEM write (same condition as debug capture)
-            if (cpu_dmem_wen) begin
-                dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
-                dbg_cpu_dmem_addr <= cpu_dmem_addr;
-                dbg_cpu_dmem_wdata <= cpu_dmem_wdata;
-                dbg_cpu_dmem_count <= dbg_cpu_dmem_count + 1;
-            end
+        end else if (cpu_dmem_wen) begin
+            dbg_cpu_dmem_addr <= cpu_dmem_addr;
+            dbg_cpu_dmem_wdata <= cpu_dmem_wdata;
+            dbg_cpu_dmem_count <= dbg_cpu_dmem_count + 1;
         end
     end
     
@@ -195,14 +200,14 @@ module riscv_soc (
     end
 
     // =========================================================================
-    // Pipeline Hazard Control (Registered for Timing)
+    // Pipeline Hazard Control
     // =========================================================================
     //
-    // Hazards are detected ONE CYCLE EARLY and registered. This breaks the
-    // critical path from hazard detection through pipeline enables.
+    // Load-use hazard: When EX has a load and ID needs its result, stall for
+    // exactly one cycle. After the stall, the load is in WB and forwards to EX.
     //
-    // Load-use hazard: When EX has a load and ID needs its result, stall for one
-    // cycle. After the stall, the load is in WB and can be forwarded to EX.
+    // Note: Using combinational stall detection for correctness. This creates
+    // a longer timing path that may need optimization for high clock speeds.
     
     logic stall;        // Stall signal (combinational)
     logic flush;        // Flush IF, ID, and EX (branch taken in MEM)
@@ -220,21 +225,17 @@ module riscv_soc (
     logic [4:0]  mem_rd;
     logic [4:0]  ex_rs1, ex_rs2;
 
-    // --- Hazard Detection ---
-    
-    // Load-use hazard: EX has a load, and the instruction in ID needs the result
-    // We must stall ID to wait for the load data.
-    // After one stall cycle, the load moves to MEM, data is read, and moves to WB.
-    // The dependent instruction in ID can then move to EX and forward from WB.
+    // --- Load-use hazard detection (combinational for single-cycle stall) ---
     wire hazard_load_use = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
                            ((ex_rd == id_rs1) || (ex_rd == id_rs2)) && id_valid;
     
-    // Stall signal - directly from hazard detection
-    // This creates a longer timing path but ensures exactly one stall cycle
     assign stall = hazard_load_use;
     
     // Control hazard: branch taken in MEM, flush IF/ID/EX (3 stages)
     assign flush = mem_branch_taken;
+
+    // =========================================================================
+    // Stage 1: IF (Instruction Fetch)
 
     // =========================================================================
     // Stage 1: IF (Instruction Fetch)
@@ -479,6 +480,7 @@ module riscv_soc (
             wb_reg_write <= 1'b0;
             wb_mem_read  <= 1'b0;
         end else if (cpu_running) begin
+            // WB always updates - stall only affects IF/ID/EX
             wb_alu_result <= mem_alu_result;
             wb_load_data  <= mem_load_data;
             wb_rd         <= mem_rd;
