@@ -123,14 +123,27 @@ module riscv_soc (
     // Address indexing
     wire [10:0] cpu_dmem_idx  = cpu_dmem_addr[12:2];
     
+    // Debug: capture last CPU DMEM write
+    logic [31:0] dbg_cpu_dmem_addr;
+    logic [31:0] dbg_cpu_dmem_wdata;
+    logic [31:0] dbg_cpu_dmem_count;
+    
     // Dual-port memory: host has priority over CPU for writes
     always_ff @(posedge clk) begin
-        if (bar_wen && bar_addr[15:13] == 3'b001) begin
+        if (~rst_n) begin
+            dbg_cpu_dmem_addr <= 32'h0;
+            dbg_cpu_dmem_wdata <= 32'h0;
+            dbg_cpu_dmem_count <= 32'h0;
+        end else if (bar_wen && bar_addr[15:13] == 3'b001) begin
             // Host write (addresses 0x2000-0x3FFF)
             dmem[bar_addr[12:2]] <= bar_wdata[31:0];
         end else if (cpu_dmem_we && cpu_running) begin
             // CPU write
             dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
+            // Debug capture
+            dbg_cpu_dmem_addr <= cpu_dmem_addr;
+            dbg_cpu_dmem_wdata <= cpu_dmem_wdata;
+            dbg_cpu_dmem_count <= dbg_cpu_dmem_count + 1;
         end
     end
     
@@ -160,10 +173,13 @@ module riscv_soc (
         case (bar_addr[15:12])
             4'h0: begin  // Control registers
                 case (bar_addr[7:3])
-                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};  // CTRL
-                    5'd1: bar_rdata = {63'b0, cpu_running};           // STATUS
-                    5'd2: bar_rdata = {32'b0, cpu_pc};                // PC
-                    5'd3: bar_rdata = {32'b0, cpu_result};            // RESULT
+                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};  // 0x00: CTRL
+                    5'd1: bar_rdata = {63'b0, cpu_running};           // 0x08: STATUS
+                    5'd2: bar_rdata = {32'b0, cpu_pc};                // 0x10: PC
+                    5'd3: bar_rdata = {32'b0, cpu_result};            // 0x18: RESULT
+                    5'd4: bar_rdata = {32'b0, dbg_cpu_dmem_addr};     // 0x20: DBG_CPU_ADDR
+                    5'd5: bar_rdata = {32'b0, dbg_cpu_dmem_wdata};    // 0x28: DBG_CPU_WDATA
+                    5'd6: bar_rdata = {32'b0, dbg_cpu_dmem_count};    // 0x30: DBG_CPU_COUNT
                     default: bar_rdata = 64'h0;
                 endcase
             end
