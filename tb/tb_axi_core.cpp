@@ -249,6 +249,30 @@ int main(int argc, char** argv) {
     }
     
     // ------------------------------------------------------------------------
+    // Read Debug Registers
+    // ------------------------------------------------------------------------
+    printf("\nSoC DMEM write debug:\n");
+    printf("  Write count:   %u\n", (uint32_t)tb.axi_read(0x30));
+    printf("  CPU addr:      0x%X\n", (uint32_t)tb.axi_read(0x20));
+    printf("  CPU data:      %u (0x%X)\n", (uint32_t)tb.axi_read(0x28), (uint32_t)tb.axi_read(0x28));
+    printf("  Mux addr:      0x%X\n", (uint32_t)tb.axi_read(0x38));
+    printf("  Mux data:      %u (0x%X)\n", (uint32_t)tb.axi_read(0x40), (uint32_t)tb.axi_read(0x40));
+    uint32_t flags = (uint32_t)tb.axi_read(0x48);
+    printf("  host_dmem_wen: %u\n", flags & 1);
+    printf("  dmem_wen:      %u\n", (flags >> 1) & 1);
+    
+    printf("\nDirect DMEM read (via debug regs):\n");
+    printf("  dmem[0]:       %u (0x%X)\n", (uint32_t)tb.axi_read(0x50), (uint32_t)tb.axi_read(0x50));
+    printf("  dmem[1]:       %u (0x%X)\n", (uint32_t)tb.axi_read(0x58), (uint32_t)tb.axi_read(0x58));
+    
+    printf("\nAXI read path debug (after DMEM[0] read):\n");
+    // Re-read DMEM to capture debug
+    tb.axi_read(0x2000);
+    printf("  SoC rdata:     0x%X\n", (uint32_t)tb.axi_read(0x118));
+    printf("  SoC raddr:     0x%X\n", (uint32_t)tb.axi_read(0x11C));
+    printf("  read_mux:      0x%X\n", (uint32_t)tb.axi_read(0x120));
+    
+    // ------------------------------------------------------------------------
     // Summary
     // ------------------------------------------------------------------------
     printf("\n");
