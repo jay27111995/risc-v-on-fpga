@@ -132,28 +132,24 @@ module riscv_soc (
     wire host_dmem_wen = bar_wen && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3);
     wire cpu_dmem_wen = cpu_dmem_we && cpu_running && !host_dmem_wen;
     
-    // Muxed write address and data
-    wire [10:0] dmem_waddr = host_dmem_wen ? bar_addr[12:2] : cpu_dmem_idx;
-    wire [31:0] dmem_wdata = host_dmem_wen ? bar_wdata[31:0] : cpu_dmem_wdata;
-    wire        dmem_wen   = host_dmem_wen || cpu_dmem_wen;
-    
-    // Single write port for DMEM
-    always_ff @(posedge clk) begin
-        if (dmem_wen) begin
-            dmem[dmem_waddr] <= dmem_wdata;
-        end
-    end
-    
-    // Debug capture (separate from memory write)
+    // Single write port for DMEM with debug capture
     always_ff @(posedge clk) begin
         if (~rst_n) begin
             dbg_cpu_dmem_addr <= 32'h0;
             dbg_cpu_dmem_wdata <= 32'h0;
             dbg_cpu_dmem_count <= 32'h0;
-        end else if (cpu_dmem_wen) begin
-            dbg_cpu_dmem_addr <= cpu_dmem_addr;
-            dbg_cpu_dmem_wdata <= cpu_dmem_wdata;
-            dbg_cpu_dmem_count <= dbg_cpu_dmem_count + 1;
+        end else begin
+            // Host DMEM write
+            if (host_dmem_wen) begin
+                dmem[bar_addr[12:2]] <= bar_wdata[31:0];
+            end
+            // CPU DMEM write (same condition as debug capture)
+            if (cpu_dmem_wen) begin
+                dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
+                dbg_cpu_dmem_addr <= cpu_dmem_addr;
+                dbg_cpu_dmem_wdata <= cpu_dmem_wdata;
+                dbg_cpu_dmem_count <= dbg_cpu_dmem_count + 1;
+            end
         end
     end
     
