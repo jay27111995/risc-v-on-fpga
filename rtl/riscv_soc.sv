@@ -150,11 +150,23 @@ module riscv_soc (
     // CPU read port (combinational for same-cycle read in MEM stage)
     assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
+    // Debug: count DMEM host reads
+    logic [31:0] dbg_dmem_read_count;
+    logic [31:0] dbg_dmem_read_addr;
+    logic [31:0] dbg_dmem_read_data;
+    
     // Host read port (registered, single 32-bit word)
     // DMEM is at 0x2000-0x3FFF (bar_addr[15:12] = 4'h2 or 4'h3)
     always_ff @(posedge clk) begin
-        if (bar_ren && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3)) begin
+        if (~rst_n) begin
+            dbg_dmem_read_count <= 32'h0;
+            dbg_dmem_read_addr <= 32'h0;
+            dbg_dmem_read_data <= 32'h0;
+        end else if (bar_ren && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3)) begin
             dmem_host_rdata <= dmem[bar_addr[12:2]];
+            dbg_dmem_read_count <= dbg_dmem_read_count + 1;
+            dbg_dmem_read_addr <= {16'h0, bar_addr};
+            dbg_dmem_read_data <= dmem[bar_addr[12:2]];
         end
     end
     
@@ -181,6 +193,9 @@ module riscv_soc (
                     5'd4: bar_rdata = {32'b0, dbg_cpu_dmem_addr};     // 0x20: DBG_CPU_ADDR
                     5'd5: bar_rdata = {32'b0, dbg_cpu_dmem_wdata};    // 0x28: DBG_CPU_WDATA
                     5'd6: bar_rdata = {32'b0, dbg_cpu_dmem_count};    // 0x30: DBG_CPU_COUNT
+                    5'd7: bar_rdata = {32'b0, dbg_dmem_read_count};   // 0x38: DBG_DMEM_RD_COUNT
+                    5'd8: bar_rdata = {32'b0, dbg_dmem_read_addr};    // 0x40: DBG_DMEM_RD_ADDR
+                    5'd9: bar_rdata = {32'b0, dbg_dmem_read_data};    // 0x48: DBG_DMEM_RD_DATA
                     default: bar_rdata = 64'h0;
                 endcase
             end

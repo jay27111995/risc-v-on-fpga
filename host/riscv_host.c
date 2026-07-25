@@ -19,6 +19,9 @@
 #define BAR_DBG_CPU_ADDR  0x0020   // Debug: last CPU DMEM write address
 #define BAR_DBG_CPU_WDATA 0x0028   // Debug: last CPU DMEM write data
 #define BAR_DBG_CPU_COUNT 0x0030   // Debug: CPU DMEM write count
+#define BAR_DBG_DMEM_RD_COUNT 0x0038  // Debug: DMEM host read count
+#define BAR_DBG_DMEM_RD_ADDR  0x0040  // Debug: last DMEM host read address
+#define BAR_DBG_DMEM_RD_DATA  0x0048  // Debug: last DMEM host read data
 #define BAR_IMEM      0x1000   // Instruction memory (4KB)
 #define BAR_DMEM      0x2000   // Data memory (8KB)
 #define BAR_DBG_AWADDR 0x100   // Debug: last AWADDR
@@ -369,6 +372,20 @@ int main(int argc, char *argv[]) {
     // Check results
     printf("\nResults:\n");
     printf("  PC:      0x%X\n", cpu_get_pc());
+    
+    // Debug: multiple DMEM reads
+    printf("  DMEM raw reads:\n");
+    for (int i = 0; i < 3; i++) {
+        uint64_t raw = read64(BAR_DMEM);
+        printf("    read64(0x2000) = 0x%016lX\n", raw);
+    }
+    
+    // Check DMEM read debug
+    printf("  DMEM read debug:\n");
+    printf("    Read count: %d\n", read32(BAR_DBG_DMEM_RD_COUNT));
+    printf("    Last addr:  0x%X\n", read32(BAR_DBG_DMEM_RD_ADDR));
+    printf("    Last data:  %d (0x%X)\n", read32(BAR_DBG_DMEM_RD_DATA), read32(BAR_DBG_DMEM_RD_DATA));
+    
     result = read_dmem(0);
     printf("  DMEM[0]: %d (expected 8)\n", result);
 
