@@ -16,6 +16,9 @@
 #define BAR_STATUS    0x0008   // [0] RUNNING
 #define BAR_PC        0x0010   // Current PC
 #define BAR_RESULT    0x0018   // CPU result
+#define BAR_DBG_CPU_ADDR  0x0020   // Debug: last CPU DMEM write address
+#define BAR_DBG_CPU_WDATA 0x0028   // Debug: last CPU DMEM write data
+#define BAR_DBG_CPU_COUNT 0x0030   // Debug: CPU DMEM write count
 #define BAR_IMEM      0x1000   // Instruction memory (4KB)
 #define BAR_DMEM      0x2000   // Data memory (8KB)
 #define BAR_DBG_AWADDR 0x100   // Debug: last AWADDR
@@ -355,6 +358,12 @@ int main(int argc, char *argv[]) {
     
     printf("  STATUS after 100ms: 0x%X\n", read32(BAR_STATUS));
     printf("  PC after 100ms: 0x%X\n", cpu_get_pc());
+
+    // Check CPU DMEM write debug
+    printf("\nCPU DMEM write debug:\n");
+    printf("  Write count: %d\n", read32(BAR_DBG_CPU_COUNT));
+    printf("  Last addr:   0x%X\n", read32(BAR_DBG_CPU_ADDR));
+    printf("  Last data:   %d (0x%X)\n", read32(BAR_DBG_CPU_WDATA), read32(BAR_DBG_CPU_WDATA));
 
     // Check results
     printf("\nResults:\n");
