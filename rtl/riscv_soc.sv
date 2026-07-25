@@ -134,7 +134,7 @@ module riscv_soc (
             dbg_cpu_dmem_addr <= 32'h0;
             dbg_cpu_dmem_wdata <= 32'h0;
             dbg_cpu_dmem_count <= 32'h0;
-        end else if (bar_wen && bar_addr[15:13] == 3'b001) begin
+        end else if (bar_wen && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3)) begin
             // Host write (addresses 0x2000-0x3FFF)
             dmem[bar_addr[12:2]] <= bar_wdata[31:0];
         end else if (cpu_dmem_we && cpu_running) begin
@@ -151,8 +151,9 @@ module riscv_soc (
     assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
     
     // Host read port (registered, single 32-bit word)
+    // DMEM is at 0x2000-0x3FFF (bar_addr[15:12] = 4'h2 or 4'h3)
     always_ff @(posedge clk) begin
-        if (bar_ren && bar_addr[15:13] == 3'b001) begin
+        if (bar_ren && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3)) begin
             dmem_host_rdata <= dmem[bar_addr[12:2]];
         end
     end

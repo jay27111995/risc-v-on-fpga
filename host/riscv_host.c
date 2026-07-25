@@ -126,6 +126,7 @@ void write_dmem(uint32_t word_idx, uint32_t data) {
 uint32_t read_dmem(uint32_t word_idx) {
     uint32_t offset = BAR_DMEM + (word_idx & ~1) * 4;  // Align to pair
     uint64_t data = read64(offset);
+    printf("  [DEBUG] read_dmem(%d): offset=0x%X raw=0x%016lX\n", word_idx, offset, data);
     if (word_idx & 1)
         return (uint32_t)(data >> 32);  // Odd word in upper
     else
