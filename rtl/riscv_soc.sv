@@ -144,15 +144,29 @@ module riscv_soc (
     end
     
     // Debug capture for CPU writes (separate always_ff)
+    logic [10:0] dbg_dmem_waddr;   // Actual muxed write address
+    logic [31:0] dbg_dmem_wdata_m; // Actual muxed write data
+    logic        dbg_host_wen;     // Was host_dmem_wen true during write?
+    logic        dbg_dmem_wen;     // Was dmem_wen true during CPU write?
+    
     always_ff @(posedge clk) begin
         if (~rst_n) begin
             dbg_cpu_dmem_addr <= 32'h0;
             dbg_cpu_dmem_wdata <= 32'h0;
             dbg_cpu_dmem_count <= 32'h0;
+            dbg_dmem_waddr <= 11'h0;
+            dbg_dmem_wdata_m <= 32'h0;
+            dbg_host_wen <= 1'b0;
+            dbg_dmem_wen <= 1'b0;
         end else if (cpu_dmem_wen) begin
             dbg_cpu_dmem_addr <= cpu_dmem_addr;
             dbg_cpu_dmem_wdata <= cpu_dmem_wdata;
             dbg_cpu_dmem_count <= dbg_cpu_dmem_count + 1;
+            // Capture actual muxed values and enables
+            dbg_dmem_waddr <= dmem_waddr;
+            dbg_dmem_wdata_m <= dmem_wdata;
+            dbg_host_wen <= host_dmem_wen;
+            dbg_dmem_wen <= dmem_wen;
         end
     end
     
@@ -190,6 +204,11 @@ module riscv_soc (
                     5'd4: bar_rdata = {32'b0, dbg_cpu_dmem_addr};     // 0x20: DBG_CPU_ADDR
                     5'd5: bar_rdata = {32'b0, dbg_cpu_dmem_wdata};    // 0x28: DBG_CPU_WDATA
                     5'd6: bar_rdata = {32'b0, dbg_cpu_dmem_count};    // 0x30: DBG_CPU_COUNT
+                    5'd7: bar_rdata = {32'b0, 21'b0, dbg_dmem_waddr}; // 0x38: DBG_MUX_ADDR
+                    5'd8: bar_rdata = {32'b0, dbg_dmem_wdata_m};      // 0x40: DBG_MUX_DATA
+                    5'd9: bar_rdata = {62'b0, dbg_dmem_wen, dbg_host_wen}; // 0x48: DBG_FLAGS
+                    5'd10: bar_rdata = {32'b0, dmem[0]};              // 0x50: DMEM[0] direct
+                    5'd11: bar_rdata = {32'b0, dmem[1]};              // 0x58: DMEM[1] direct
                     default: bar_rdata = 64'h0;
                 endcase
             end

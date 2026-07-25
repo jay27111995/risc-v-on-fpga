@@ -396,18 +396,21 @@ module axi_core_hw(
   end
   
   // =========================================================================
-  // Debug Registers (addresses 0x100-0x11F)
+  // Debug Registers (addresses 0x100-0x12F)
   // =========================================================================
   
   logic [31:0] dbg_rdata;
   always_comb begin
-    case (bar_raddr[4:2])
-      3'd0: dbg_rdata = dbg_last_awaddr[21:0];           // 0x100: last AWADDR (low)
-      3'd1: dbg_rdata = 32'h0;                           // 0x104: (high, unused)
-      3'd2: dbg_rdata = dbg_last_wdata[31:0];            // 0x108: last WDATA (low)
-      3'd3: dbg_rdata = dbg_last_wdata[63:32];           // 0x10C: last WDATA (high)
-      3'd4: dbg_rdata = dbg_write_count;                 // 0x110: write count
-      3'd5: dbg_rdata = {24'h0, dbg_last_wstrb};         // 0x114: WSTRB
+    case (bar_raddr[5:2])
+      4'd0: dbg_rdata = dbg_last_awaddr[21:0];           // 0x100: last AWADDR (low)
+      4'd1: dbg_rdata = 32'h0;                           // 0x104: (high, unused)
+      4'd2: dbg_rdata = dbg_last_wdata[31:0];            // 0x108: last WDATA (low)
+      4'd3: dbg_rdata = dbg_last_wdata[63:32];           // 0x10C: last WDATA (high)
+      4'd4: dbg_rdata = dbg_write_count;                 // 0x110: write count
+      4'd5: dbg_rdata = {24'h0, dbg_last_wstrb};         // 0x114: WSTRB
+      4'd6: dbg_rdata = dbg_soc_rdata;                   // 0x118: last SoC read data
+      4'd7: dbg_rdata = {16'h0, dbg_soc_raddr};          // 0x11C: last SoC read addr
+      4'd8: dbg_rdata = dbg_read_mux;                    // 0x120: last read_data_mux
       default: dbg_rdata = 32'h0;
     endcase
   end
@@ -439,6 +442,20 @@ module axi_core_hw(
   assign read_data_mux = (bar_raddr[15:8] == 8'h01) ? dbg_rdata :      // 0x100-0x1FF: Debug
                          (bar_raddr[15:8] == 8'h02) ? test_mem_rdata : // 0x200-0x2FF: Test mem
                          soc_rdata[31:0];                               // Everything else: SoC
+  
+  // Debug: capture what we read from SoC during DMEM reads (0x2000+)
+  logic [31:0] dbg_soc_rdata;
+  logic [15:0] dbg_soc_raddr;
+  logic [31:0] dbg_read_mux;
+  
+  always_ff @(posedge clk) begin
+    // Only capture for DMEM range (0x2000-0x3FFF)
+    if (bar_ren && (bar_raddr[15:12] == 4'h2 || bar_raddr[15:12] == 4'h3)) begin
+      dbg_soc_rdata <= soc_rdata[31:0];
+      dbg_soc_raddr <= bar_raddr[15:0];
+      dbg_read_mux <= read_data_mux;
+    end
+  end
   
   // Update capture logic to use the muxed read data
   always_ff @(posedge clk) begin

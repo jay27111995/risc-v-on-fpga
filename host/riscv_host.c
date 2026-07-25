@@ -19,11 +19,19 @@
 #define BAR_DBG_CPU_ADDR  0x0020   // Debug: last CPU DMEM write address
 #define BAR_DBG_CPU_WDATA 0x0028   // Debug: last CPU DMEM write data
 #define BAR_DBG_CPU_COUNT 0x0030   // Debug: CPU DMEM write count
+#define BAR_DBG_MUX_ADDR  0x0038   // Debug: muxed DMEM write address
+#define BAR_DBG_MUX_DATA  0x0040   // Debug: muxed DMEM write data
+#define BAR_DBG_FLAGS     0x0048   // Debug: bit0=host_wen, bit1=dmem_wen
+#define BAR_DBG_DMEM0     0x0050   // Debug: direct dmem[0] read
+#define BAR_DBG_DMEM1     0x0058   // Debug: direct dmem[1] read
 #define BAR_IMEM      0x1000   // Instruction memory (4KB)
 #define BAR_DMEM      0x2000   // Data memory (8KB)
 #define BAR_DBG_AWADDR 0x100   // Debug: last AWADDR
 #define BAR_DBG_WDATA  0x108   // Debug: last WDATA
 #define BAR_DBG_WSTRB  0x110   // Debug: last WSTRB + write count
+#define BAR_DBG_SOC_RDATA 0x118 // Debug: last SoC read data
+#define BAR_DBG_SOC_RADDR 0x11C // Debug: last SoC read addr
+#define BAR_DBG_READ_MUX  0x120 // Debug: last read_data_mux
 #define BAR_TEST_MEM   0x200   // Test memory (256 bytes)
 
 // Control bits
@@ -376,6 +384,11 @@ int main(int argc, char *argv[]) {
     printf("  Write count: %d\n", read32(BAR_DBG_CPU_COUNT));
     printf("  Last addr:   0x%X\n", read32(BAR_DBG_CPU_ADDR));
     printf("  Last data:   %d (0x%X)\n", read32(BAR_DBG_CPU_WDATA), read32(BAR_DBG_CPU_WDATA));
+    printf("  Mux addr:    0x%X\n", read32(BAR_DBG_MUX_ADDR));
+    printf("  Mux data:    %d (0x%X)\n", read32(BAR_DBG_MUX_DATA), read32(BAR_DBG_MUX_DATA));
+    uint32_t flags = read32(BAR_DBG_FLAGS);
+    printf("  Host WEN:    %d\n", flags & 1);
+    printf("  DMEM WEN:    %d\n", (flags >> 1) & 1);
 
     // Check results
     printf("\nResults:\n");
@@ -383,6 +396,17 @@ int main(int argc, char *argv[]) {
     
     result = read_dmem(0);
     printf("  DMEM[0]: %d (expected 8)\n", result);
+    
+    // Direct dmem read via debug registers (bypasses normal read path)
+    printf("\nDirect DMEM read (via debug regs):\n");
+    printf("  dmem[0]:     %d (0x%X)\n", read32(BAR_DBG_DMEM0), read32(BAR_DBG_DMEM0));
+    printf("  dmem[1]:     %d (0x%X)\n", read32(BAR_DBG_DMEM1), read32(BAR_DBG_DMEM1));
+    
+    // AXI read path debug (captured during DMEM read above)
+    printf("\nAXI read path debug:\n");
+    printf("  SoC rdata:   0x%X\n", read32(BAR_DBG_SOC_RDATA));
+    printf("  SoC raddr:   0x%X\n", read32(BAR_DBG_SOC_RADDR));
+    printf("  read_mux:    0x%X\n", read32(BAR_DBG_READ_MUX));
 
     cpu_stop();
     vfio_cleanup();
