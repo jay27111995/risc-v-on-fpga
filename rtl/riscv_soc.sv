@@ -109,7 +109,7 @@ module riscv_soc (
     // DMEM - Data Memory (8KB, shared between host and CPU)
     // =========================================================================
     
-    logic [31:0] dmem [0:2047];      // 2048 x 32-bit = 8KB
+    (* ramstyle = "no_rw_check, M20K" *) logic [31:0] dmem [0:2047];  // 2048 x 32-bit = 8KB
     logic [31:0] dmem_host_rdata;    // Registered read for host access
     
     // CPU port signals
@@ -191,6 +191,14 @@ module riscv_soc (
     // BAR Read Multiplexer
     // =========================================================================
     
+    // Registered direct dmem reads for debug (avoid multi-port inference issues)
+    logic [31:0] dbg_dmem0_reg;
+    logic [31:0] dbg_dmem1_reg;
+    always_ff @(posedge clk) begin
+        dbg_dmem0_reg <= dmem[0];
+        dbg_dmem1_reg <= dmem[1];
+    end
+
     always_comb begin
         bar_rdata = 64'h0;
         
@@ -207,8 +215,8 @@ module riscv_soc (
                     5'd7: bar_rdata = {32'b0, 21'b0, dbg_dmem_waddr}; // 0x38: DBG_MUX_ADDR
                     5'd8: bar_rdata = {32'b0, dbg_dmem_wdata_m};      // 0x40: DBG_MUX_DATA
                     5'd9: bar_rdata = {62'b0, dbg_dmem_wen, dbg_host_wen}; // 0x48: DBG_FLAGS
-                    5'd10: bar_rdata = {32'b0, dmem[0]};              // 0x50: DMEM[0] direct
-                    5'd11: bar_rdata = {32'b0, dmem[1]};              // 0x58: DMEM[1] direct
+                    5'd10: bar_rdata = {32'b0, dbg_dmem0_reg};        // 0x50: DMEM[0] registered
+                    5'd11: bar_rdata = {32'b0, dbg_dmem1_reg};        // 0x58: DMEM[1] registered
                     default: bar_rdata = 64'h0;
                 endcase
             end
