@@ -1,34 +1,17 @@
 // RISC-V SoC with PCIe BAR Interface
 // ============================================================================
 //
-// A minimal RV32I CPU with classic 5-stage pipeline, designed for FPGA at 500MHz.
+// A minimal RV32I CPU with classic 5-stage pipeline.
 //
-// Pipeline Stages:
-//   IF  - Instruction Fetch: Read instruction from IMEM
-//   ID  - Instruction Decode: Decode opcode, read register file
-//   EX  - Execute: ALU operation, compute branch condition
-//   MEM - Memory: Load/store access to DMEM, branch resolution
-//   WB  - Write Back: Write result to register file
-//
-// Hazard Handling:
-//   - Data forwarding from MEM and WB stages to EX stage
-//   - Load-use hazard: stall one cycle, then forward from WB
-//   - Branch penalty: 3 cycles (flush IF/ID/EX when branch taken in MEM)
-//
-// Timing Optimizations for 500MHz:
-//   - Branch resolved in MEM stage (not EX) to break ALU→branch→flush path
-//
-// Memory Map (directly mapped to PCIe BAR0):
+// Memory Map:
 //   0x0000-0x00FF  Control registers (64-bit aligned)
-//   0x1000-0x1FFF  IMEM - 4KB instruction memory (1024 x 32-bit)
-//   0x2000-0x3FFF  DMEM - 8KB data memory (2048 x 32-bit)
+//   0x1000-0x1FFF  IMEM - 4KB instruction memory
+//   0x2000-0x3FFF  DMEM - 8KB data memory (64-bit wide for PCIe alignment)
 //
 // Control Registers:
-//   0x00  CTRL    [0] RUN - enable CPU execution
-//                 [1] RESET - software reset (self-clearing)
-//   0x08  STATUS  [0] RUNNING - CPU is executing
-//   0x10  PC      Current program counter (read-only)
-//   0x18  RESULT  Last write-back value (read-only, for debug)
+//   0x00  CTRL    [0] RUN, [1] RESET
+//   0x08  STATUS  [0] RUNNING
+//   0x10  PC      Current program counter
 //
 // ============================================================================
 
@@ -36,41 +19,36 @@ module riscv_soc (
     input  logic        clk,
     input  logic        rst_n,
     
-    // BAR interface (directly from AXI wrapper)
-    input  logic [15:0] bar_addr,      // Byte address within BAR
-    input  logic [63:0] bar_wdata,     // Write data (64-bit)
-    input  logic        bar_wen,       // Write enable
-    input  logic        bar_ren,       // Read enable (captures read data)
-    output logic [63:0] bar_rdata      // Read data (64-bit)
+    // BAR interface
+    input  logic [15:0] bar_addr,
+    input  logic [63:0] bar_wdata,
+    input  logic        bar_wen,
+    input  logic        bar_ren,
+    output logic [63:0] bar_rdata
 );
 
     // =========================================================================
     // Control Registers
     // =========================================================================
     
-    logic        ctrl_run;          // CPU run enable
-    logic        ctrl_reset;        // Software reset (self-clearing)
-    logic [31:0] cpu_pc;            // Current PC (for status readback)
-    logic [31:0] cpu_result;        // Last WB result (for debug)
+    logic        ctrl_run;
+    logic        ctrl_reset;
+    logic [31:0] cpu_pc;
     
-    // Internal control signals
-    logic cpu_rst;                  // Combined reset (hardware OR software)
-    logic cpu_running;              // CPU is actively executing
+    logic cpu_rst;
+    logic cpu_running;
     
     assign cpu_rst = ~rst_n | ctrl_reset;
     assign cpu_running = ctrl_run & ~ctrl_reset;
     
-    // Control register write logic
     always_ff @(posedge clk or negedge rst_n) begin
         if (~rst_n) begin
             ctrl_run <= 1'b0;
             ctrl_reset <= 1'b0;
         end else begin
-            // Self-clear the reset bit after one cycle
             if (ctrl_reset)
                 ctrl_reset <= 1'b0;
             
-            // Write to CTRL register at offset 0x00 only (not 0x04)
             if (bar_wen && bar_addr[15:12] == 4'h0 && bar_addr[7:2] == 6'd0) begin
                 ctrl_run   <= bar_wdata[0];
                 ctrl_reset <= bar_wdata[1];
@@ -79,82 +57,56 @@ module riscv_soc (
     end
 
     // =========================================================================
-    // IMEM - Instruction Memory (4KB, host-writable, CPU-readable)
+    // IMEM - Instruction Memory (4KB)
     // =========================================================================
     
-    logic [31:0] imem [0:1023];      // 1024 x 32-bit = 4KB
-    logic [31:0] imem_host_rdata;    // Registered read for host access
+    logic [31:0] imem [0:1023];
+    logic [31:0] imem_host_rdata;
     
-    // Host write port
     always_ff @(posedge clk) begin
-        if (bar_wen && bar_addr[15:12] == 4'h1) begin
+        if (bar_wen && bar_addr[15:12] == 4'h1)
             imem[bar_addr[11:2]] <= bar_wdata[31:0];
-        end
     end
     
-    // Host read port (registered, single 32-bit word)
     always_ff @(posedge clk) begin
-        if (bar_ren && bar_addr[15:12] == 4'h1) begin
+        if (bar_ren && bar_addr[15:12] == 4'h1)
             imem_host_rdata <= imem[bar_addr[11:2]];
-        end
     end
     
-    // Initialize to NOPs (ADDI x0, x0, 0)
     initial begin
         for (int i = 0; i < 1024; i++)
-            imem[i] = 32'h00000013;
+            imem[i] = 32'h00000013;  // NOP
     end
     
     // =========================================================================
     // DMEM - Data Memory (8KB, 64-bit wide)
     // =========================================================================
     //
-    // 64-bit wide memory simplifies host access (single 64-bit AXI transaction)
-    // CPU accesses 32-bit words within the 64-bit entries
-    //
-    // Memory layout: 1024 x 64-bit = 8KB
-    // Host address mapping:
-    //   0x2000 -> dmem[0] (64-bit)
-    //   0x2008 -> dmem[1] (64-bit)
-    //   etc.
-    // CPU address mapping (32-bit words):
-    //   addr=0x0 -> dmem[0][31:0]   (even word)
-    //   addr=0x4 -> dmem[0][63:32]  (odd word)
-    //   addr=0x8 -> dmem[1][31:0]
-    //   etc.
+    // 64-bit wide to match PCIe 8-byte alignment requirement.
+    // CPU accesses 32-bit words within 64-bit entries.
     
-    (* ramstyle = "no_rw_check, M20K" *) logic [63:0] dmem [0:1023];  // 1024 x 64-bit = 8KB
+    (* ramstyle = "no_rw_check, M20K" *) logic [63:0] dmem [0:1023];
     
     // CPU port signals
-    logic [31:0] cpu_dmem_addr;      // Byte address from MEM stage
-    logic [31:0] cpu_dmem_wdata;     // Write data from MEM stage (32-bit)
-    logic [31:0] cpu_dmem_rdata;     // Read data to MEM stage (32-bit)
-    logic        cpu_dmem_we;        // Write enable from MEM stage
+    logic [31:0] cpu_dmem_addr;
+    logic [31:0] cpu_dmem_wdata;
+    logic [31:0] cpu_dmem_rdata;
+    logic        cpu_dmem_we;
     
-    // Address indexing for CPU (32-bit word access within 64-bit entry)
-    wire [9:0]  cpu_dmem_idx   = cpu_dmem_addr[12:3];  // 64-bit entry index
-    wire        cpu_dmem_odd   = cpu_dmem_addr[2];     // Which 32-bit half (0=low, 1=high)
-    
-    // Host address indexing (64-bit aligned)
-    wire [9:0]  host_dmem_idx  = bar_addr[12:3];
-    
-    // Debug: capture last CPU DMEM write
-    logic [31:0] dbg_cpu_dmem_addr;
-    logic [31:0] dbg_cpu_dmem_wdata;
-    logic [31:0] dbg_cpu_dmem_count;
+    // Address indexing
+    wire [9:0]  cpu_dmem_idx  = cpu_dmem_addr[12:3];  // 64-bit entry
+    wire        cpu_dmem_odd  = cpu_dmem_addr[2];     // Which half
+    wire [9:0]  host_dmem_idx = bar_addr[12:3];
     
     // Write enables
     wire host_dmem_wen = bar_wen && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3);
-    wire cpu_dmem_wen = cpu_dmem_we && cpu_running && !host_dmem_wen;
+    wire cpu_dmem_wen  = cpu_dmem_we && cpu_running && !host_dmem_wen;
     
-    // Single write port - host has priority (full 64-bit), CPU writes 32-bit halves
-    // Quartus requires single always_ff block for memory writes
+    // Single write port (Quartus requirement)
     always_ff @(posedge clk) begin
         if (host_dmem_wen) begin
-            // Host write: full 64-bit
             dmem[host_dmem_idx] <= bar_wdata;
         end else if (cpu_dmem_wen) begin
-            // CPU write: 32-bit to selected half
             if (cpu_dmem_odd)
                 dmem[cpu_dmem_idx][63:32] <= cpu_dmem_wdata;
             else
@@ -162,47 +114,16 @@ module riscv_soc (
         end
     end
     
-    // Debug capture for CPU writes
-    logic [9:0]  dbg_dmem_idx;
-    logic        dbg_dmem_odd;
-    logic [31:0] dbg_dmem_wdata_m;
-    logic        dbg_host_wen;
-    logic        dbg_dmem_wen;
-    
-    always_ff @(posedge clk) begin
-        if (~rst_n) begin
-            dbg_cpu_dmem_addr <= 32'h0;
-            dbg_cpu_dmem_wdata <= 32'h0;
-            dbg_cpu_dmem_count <= 32'h0;
-            dbg_dmem_idx <= 10'h0;
-            dbg_dmem_odd <= 1'b0;
-            dbg_dmem_wdata_m <= 32'h0;
-            dbg_host_wen <= 1'b0;
-            dbg_dmem_wen <= 1'b0;
-        end else if (cpu_dmem_wen) begin
-            dbg_cpu_dmem_addr <= cpu_dmem_addr;
-            dbg_cpu_dmem_wdata <= cpu_dmem_wdata;
-            dbg_cpu_dmem_count <= dbg_cpu_dmem_count + 1;
-            dbg_dmem_idx <= cpu_dmem_idx;
-            dbg_dmem_odd <= cpu_dmem_odd;
-            dbg_dmem_wdata_m <= cpu_dmem_wdata;
-            dbg_host_wen <= host_dmem_wen;
-            dbg_dmem_wen <= 1'b1;
-        end
-    end
-    
-    // CPU read port - 32-bit from selected half (combinational)
+    // CPU read (combinational)
     assign cpu_dmem_rdata = cpu_dmem_odd ? dmem[cpu_dmem_idx][63:32] : dmem[cpu_dmem_idx][31:0];
     
-    // Host read port - full 64-bit (registered)
+    // Host read (registered)
     logic [63:0] dmem_host_rdata;
     always_ff @(posedge clk) begin
-        if (bar_ren && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3)) begin
+        if (bar_ren && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3))
             dmem_host_rdata <= dmem[host_dmem_idx];
-        end
     end
     
-    // Initialize to zero
     initial begin
         for (int i = 0; i < 1024; i++)
             dmem[i] = 64'h0;
@@ -211,35 +132,20 @@ module riscv_soc (
     // =========================================================================
     // BAR Read Multiplexer
     // =========================================================================
-    
-    // Registered direct dmem reads for debug
-    logic [63:0] dbg_dmem0_reg;
-    always_ff @(posedge clk) begin
-        dbg_dmem0_reg <= dmem[0];
-    end
 
     always_comb begin
         bar_rdata = 64'h0;
-        
         case (bar_addr[15:12])
-            4'h0: begin  // Control registers
+            4'h0: begin
                 case (bar_addr[7:3])
-                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};  // 0x00: CTRL
-                    5'd1: bar_rdata = {63'b0, cpu_running};           // 0x08: STATUS
-                    5'd2: bar_rdata = {32'b0, cpu_pc};                // 0x10: PC
-                    5'd3: bar_rdata = {32'b0, cpu_result};            // 0x18: RESULT
-                    5'd4: bar_rdata = {32'b0, dbg_cpu_dmem_addr};     // 0x20: DBG_CPU_ADDR
-                    5'd5: bar_rdata = {32'b0, dbg_cpu_dmem_wdata};    // 0x28: DBG_CPU_WDATA
-                    5'd6: bar_rdata = {32'b0, dbg_cpu_dmem_count};    // 0x30: DBG_CPU_COUNT
-                    5'd7: bar_rdata = {32'b0, 22'b0, dbg_dmem_idx};   // 0x38: DBG_IDX
-                    5'd8: bar_rdata = {32'b0, dbg_dmem_wdata_m};      // 0x40: DBG_MUX_DATA
-                    5'd9: bar_rdata = {61'b0, dbg_dmem_odd, dbg_dmem_wen, dbg_host_wen}; // 0x48: DBG_FLAGS
-                    5'd10: bar_rdata = dbg_dmem0_reg;                 // 0x50: DMEM[0] full 64-bit
+                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};  // CTRL
+                    5'd1: bar_rdata = {63'b0, cpu_running};           // STATUS
+                    5'd2: bar_rdata = {32'b0, cpu_pc};                // PC
                     default: bar_rdata = 64'h0;
                 endcase
             end
-            4'h1:        bar_rdata = {32'b0, imem_host_rdata};  // IMEM (32-bit)
-            4'h2, 4'h3:  bar_rdata = dmem_host_rdata;           // DMEM (full 64-bit)
+            4'h1:        bar_rdata = {32'b0, imem_host_rdata};
+            4'h2, 4'h3:  bar_rdata = dmem_host_rdata;
             default:     bar_rdata = 64'h0;
         endcase
     end
@@ -247,64 +153,43 @@ module riscv_soc (
     // =========================================================================
     // Pipeline Hazard Control
     // =========================================================================
-    //
-    // Load-use hazard: When EX has a load and ID needs its result, stall for
-    // exactly one cycle. After the stall, the load is in WB and forwards to EX.
-    //
-    // Note: Using combinational stall detection for correctness. This creates
-    // a longer timing path that may need optimization for high clock speeds.
     
-    logic stall;        // Stall signal (combinational)
-    logic flush;        // Flush IF, ID, and EX (branch taken in MEM)
+    logic stall;
+    logic flush;
     
-    // Forward declarations for hazard detection
-    logic        ex_mem_read;
-    logic        ex_valid;
-    logic [4:0]  ex_rd;
-    logic [4:0]  id_rs1, id_rs2;
+    // Forward declarations
+    logic        ex_mem_read, ex_valid;
+    logic [4:0]  ex_rd, id_rs1, id_rs2;
     logic        id_valid;
-    logic        mem_branch_taken;  // Branch resolved in MEM stage
-    logic [31:0] mem_branch_target; // Branch target from MEM stage
-    logic        mem_mem_read;
-    logic        mem_valid;
-    logic [4:0]  mem_rd;
-    logic [4:0]  ex_rs1, ex_rs2;
+    logic        mem_branch_taken;
+    logic [31:0] mem_branch_target;
+    logic        mem_mem_read, mem_valid;
+    logic [4:0]  mem_rd, ex_rs1, ex_rs2;
 
-    // --- Load-use hazard detection (combinational for single-cycle stall) ---
+    // Load-use hazard (combinational for single-cycle stall)
     wire hazard_load_use = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
                            ((ex_rd == id_rs1) || (ex_rd == id_rs2)) && id_valid;
     
     assign stall = hazard_load_use;
-    
-    // Control hazard: branch taken in MEM, flush IF/ID/EX (3 stages)
     assign flush = mem_branch_taken;
 
     // =========================================================================
     // Stage 1: IF (Instruction Fetch)
-
-    // =========================================================================
-    // Stage 1: IF (Instruction Fetch)
     // =========================================================================
     
-    logic [31:0] if_pc;             // Current PC
-    logic [31:0] if_instr;          // Fetched instruction
+    logic [31:0] if_pc;
+    logic [31:0] if_instr;
     
-    // Next PC selection (branch resolved in MEM stage)
     wire [31:0] if_pc_next = mem_branch_taken ? mem_branch_target : (if_pc + 32'd4);
     
-    // PC register
     always_ff @(posedge clk) begin
-        if (cpu_rst) begin
+        if (cpu_rst)
             if_pc <= 32'h0;
-        end else if (cpu_running && !stall) begin
+        else if (cpu_running && !stall)
             if_pc <= if_pc_next;
-        end
     end
     
-    // Instruction fetch (combinational IMEM read)
     assign if_instr = imem[if_pc[11:2]];
-    
-    // Export PC for debug/status
     assign cpu_pc = if_pc;
 
     // =========================================================================
@@ -313,34 +198,26 @@ module riscv_soc (
     
     logic [31:0] id_pc;
     logic [31:0] id_instr;
-    // id_valid declared in forward declarations
     
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
-            // Insert bubble (NOP)
             id_valid <= 1'b0;
-            id_instr <= 32'h00000013;  // NOP
+            id_instr <= 32'h00000013;
         end else if (cpu_running && !stall) begin
             id_pc    <= if_pc;
             id_instr <= if_instr;
             id_valid <= 1'b1;
         end
-        // When stalled: hold current values (implicit)
     end
 
     // =========================================================================
-    // Stage 2: ID (Instruction Decode + Register Read)
+    // Stage 2: ID (Instruction Decode)
     // =========================================================================
     
-    // Decoder outputs
     logic [4:0]  id_rd;
     logic [31:0] id_imm;
     logic [2:0]  id_alu_op;
-    logic        id_reg_write;
-    logic        id_alu_src;
-    logic        id_mem_read;
-    logic        id_mem_write;
-    logic        id_branch;
+    logic        id_reg_write, id_alu_src, id_mem_read, id_mem_write, id_branch;
     
     decoder decoder_inst (
         .instr     (id_instr),
@@ -356,7 +233,6 @@ module riscv_soc (
         .branch    (id_branch)
     );
     
-    // Register file
     logic [31:0] id_rs1_data, id_rs2_data;
     logic [31:0] wb_rd_data;
     logic        wb_reg_write;
@@ -381,15 +257,10 @@ module riscv_soc (
     logic [31:0] ex_rs1_data, ex_rs2_data;
     logic [31:0] ex_imm;
     logic [2:0]  ex_alu_op;
-    // ex_rs1, ex_rs2 declared in forward declarations
-    logic        ex_reg_write;
-    logic        ex_alu_src;
-    logic        ex_mem_write;
-    logic        ex_branch;
+    logic        ex_reg_write, ex_alu_src, ex_mem_write, ex_branch;
     
     always_ff @(posedge clk) begin
         if (cpu_rst || flush || stall) begin
-            // Insert bubble
             ex_valid     <= 1'b0;
             ex_reg_write <= 1'b0;
             ex_mem_read  <= 1'b0;
@@ -417,36 +288,21 @@ module riscv_soc (
     // Stage 3: EX (Execute)
     // =========================================================================
     
-    // --- Data Forwarding Logic ---
-    // Forward from MEM and WB stages to resolve data hazards
     logic [31:0] mem_alu_result;
     logic        mem_reg_write;
-    // mem_mem_read, mem_rd declared in forward declarations
     
-    // Forward from MEM stage (ALU results available)
+    // Forwarding
     wire fwd_mem_rs1 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs1);
     wire fwd_mem_rs2 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs2);
+    wire fwd_wb_rs1  = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs1) && !fwd_mem_rs1;
+    wire fwd_wb_rs2  = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs2) && !fwd_mem_rs2;
     
-    // Forward from WB stage (both ALU results and load data)
-    // After a load-use stall, the load is in WB when the dependent instr enters EX.
-    // The ID/EX register captured stale regfile data, so we must forward from WB.
-    wire fwd_wb_rs1 = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs1) && !fwd_mem_rs1;
-    wire fwd_wb_rs2 = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs2) && !fwd_mem_rs2;
+    wire [31:0] ex_fwd_rs1 = fwd_mem_rs1 ? mem_alu_result : fwd_wb_rs1 ? wb_rd_data : ex_rs1_data;
+    wire [31:0] ex_fwd_rs2 = fwd_mem_rs2 ? mem_alu_result : fwd_wb_rs2 ? wb_rd_data : ex_rs2_data;
     
-    // Forwarding muxes - use wb_rd_data which includes load data
-    wire [31:0] ex_fwd_rs1 = fwd_mem_rs1 ? mem_alu_result :
-                            fwd_wb_rs1  ? wb_rd_data :
-                            ex_rs1_data;
-    
-    wire [31:0] ex_fwd_rs2 = fwd_mem_rs2 ? mem_alu_result :
-                            fwd_wb_rs2  ? wb_rd_data :
-                            ex_rs2_data;
-    
-    // ALU operand selection
     wire [31:0] ex_alu_a = ex_fwd_rs1;
     wire [31:0] ex_alu_b = ex_alu_src ? ex_imm : ex_fwd_rs2;
     
-    // ALU instance
     logic [31:0] ex_alu_result;
     logic        ex_alu_zero;
     
@@ -457,20 +313,17 @@ module riscv_soc (
         .result (ex_alu_result),
         .zero   (ex_alu_zero)
     );
-    
-    // Branch info passed to MEM stage for resolution (breaks timing path)
 
     // =========================================================================
     // EX/MEM Pipeline Register
     // =========================================================================
     
-    logic [31:0] mem_store_data;    // Data to store (forwarded rs2)
+    logic [31:0] mem_store_data;
     logic        mem_mem_write;
-    logic        mem_branch;        // Branch instruction in MEM
-    logic        mem_alu_zero;      // ALU zero flag for branch comparison
-    logic [31:0] mem_pc;            // PC for branch target calculation
-    logic [31:0] mem_imm;           // Immediate for branch target
-    // mem_mem_read, mem_valid, mem_rd declared in forward declarations
+    logic        mem_branch;
+    logic        mem_alu_zero;
+    logic [31:0] mem_pc;
+    logic [31:0] mem_imm;
     
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -481,7 +334,7 @@ module riscv_soc (
             mem_branch    <= 1'b0;
         end else if (cpu_running) begin
             mem_alu_result <= ex_alu_result;
-            mem_store_data <= ex_fwd_rs2;      // Use forwarded value for stores
+            mem_store_data <= ex_fwd_rs2;
             mem_rd         <= ex_rd;
             mem_reg_write  <= ex_reg_write;
             mem_mem_read   <= ex_mem_read;
@@ -498,16 +351,13 @@ module riscv_soc (
     // Stage 4: MEM (Memory Access)
     // =========================================================================
     
-    // Branch resolution (moved from EX to break timing path)
     assign mem_branch_taken  = mem_branch && mem_alu_zero && mem_valid;
     assign mem_branch_target = mem_pc + mem_imm;
     
-    // Connect to DMEM
     assign cpu_dmem_addr  = mem_alu_result;
     assign cpu_dmem_wdata = mem_store_data;
     assign cpu_dmem_we    = mem_mem_write && mem_valid;
     
-    // Memory read data (combinational - available same cycle)
     wire [31:0] mem_load_data = cpu_dmem_rdata;
 
     // =========================================================================
@@ -525,7 +375,6 @@ module riscv_soc (
             wb_reg_write <= 1'b0;
             wb_mem_read  <= 1'b0;
         end else if (cpu_running) begin
-            // WB always updates - stall only affects IF/ID/EX
             wb_alu_result <= mem_alu_result;
             wb_load_data  <= mem_load_data;
             wb_rd         <= mem_rd;
@@ -539,10 +388,6 @@ module riscv_soc (
     // Stage 5: WB (Write Back)
     // =========================================================================
     
-    // Select between ALU result and memory load data
     assign wb_rd_data = wb_mem_read ? wb_load_data : wb_alu_result;
-    
-    // Debug output: last value written to register file
-    assign cpu_result = wb_rd_data;
 
 endmodule
