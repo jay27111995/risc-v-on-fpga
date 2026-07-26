@@ -19,13 +19,12 @@
 #define BAR_DBG_CPU_ADDR  0x0020   // Debug: last CPU DMEM write address
 #define BAR_DBG_CPU_WDATA 0x0028   // Debug: last CPU DMEM write data
 #define BAR_DBG_CPU_COUNT 0x0030   // Debug: CPU DMEM write count
-#define BAR_DBG_MUX_ADDR  0x0038   // Debug: muxed DMEM write address
+#define BAR_DBG_MUX_ADDR  0x0038   // Debug: muxed DMEM write index
 #define BAR_DBG_MUX_DATA  0x0040   // Debug: muxed DMEM write data
-#define BAR_DBG_FLAGS     0x0048   // Debug: bit0=host_wen, bit1=dmem_wen
-#define BAR_DBG_DMEM0     0x0050   // Debug: direct dmem[0] read
-#define BAR_DBG_DMEM1     0x0058   // Debug: direct dmem[1] read
+#define BAR_DBG_FLAGS     0x0048   // Debug: bit0=host_wen, bit1=dmem_wen, bit2=odd
+#define BAR_DBG_DMEM0     0x0050   // Debug: direct dmem[0] read (full 64-bit)
 #define BAR_IMEM      0x1000   // Instruction memory (4KB)
-#define BAR_DMEM      0x2000   // Data memory (8KB)
+#define BAR_DMEM      0x2000   // Data memory (8KB, 64-bit wide)
 #define BAR_DBG_AWADDR 0x100   // Debug: last AWADDR
 #define BAR_DBG_WDATA  0x108   // Debug: last WDATA
 #define BAR_DBG_WSTRB  0x110   // Debug: last WSTRB + write count
@@ -132,13 +131,16 @@ void write_dmem(uint32_t word_idx, uint32_t data) {
 }
 
 uint32_t read_dmem(uint32_t word_idx) {
-    uint32_t offset = BAR_DMEM + (word_idx & ~1) * 4;  // Align to pair
+    // DMEM is 64-bit wide, addressed by 64-bit entries
+    // word 0,1 -> dmem[0], word 2,3 -> dmem[1], etc.
+    uint32_t pair_idx = word_idx / 2;
+    uint32_t offset = BAR_DMEM + pair_idx * 8;
     uint64_t data = read64(offset);
     printf("  [DEBUG] read_dmem(%d): offset=0x%X raw=0x%016lX\n", word_idx, offset, data);
     if (word_idx & 1)
-        return (uint32_t)(data >> 32);  // Odd word in upper
+        return (uint32_t)(data >> 32);  // Odd word in upper 32 bits
     else
-        return (uint32_t)data;           // Even word in lower
+        return (uint32_t)data;           // Even word in lower 32 bits
 }
 
 void test_axi_memory(void) {
@@ -398,9 +400,11 @@ int main(int argc, char *argv[]) {
     printf("  DMEM[0]: %d (expected 8)\n", result);
     
     // Direct dmem read via debug registers (bypasses normal read path)
+    // 0x50 now returns full 64-bit dmem[0]
     printf("\nDirect DMEM read (via debug regs):\n");
-    printf("  dmem[0]:     %d (0x%X)\n", read32(BAR_DBG_DMEM0), read32(BAR_DBG_DMEM0));
-    printf("  dmem[1]:     %d (0x%X)\n", read32(BAR_DBG_DMEM1), read32(BAR_DBG_DMEM1));
+    uint64_t dmem0_full = read64(BAR_DBG_DMEM0);
+    printf("  dmem[0]:     0x%016lX (low32=%d, high32=%d)\n", 
+           dmem0_full, (uint32_t)dmem0_full, (uint32_t)(dmem0_full >> 32));
     
     // AXI read path debug (captured during DMEM read above)
     printf("\nAXI read path debug:\n");
