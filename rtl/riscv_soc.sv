@@ -147,16 +147,14 @@ module riscv_soc (
     wire host_dmem_wen = bar_wen && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3);
     wire cpu_dmem_wen = cpu_dmem_we && cpu_running && !host_dmem_wen;
     
-    // Host write port - full 64-bit write
+    // Single write port - host has priority (full 64-bit), CPU writes 32-bit halves
+    // Quartus requires single always_ff block for memory writes
     always_ff @(posedge clk) begin
         if (host_dmem_wen) begin
+            // Host write: full 64-bit
             dmem[host_dmem_idx] <= bar_wdata;
-        end
-    end
-    
-    // CPU write port - 32-bit write to either half
-    always_ff @(posedge clk) begin
-        if (cpu_dmem_wen) begin
+        end else if (cpu_dmem_wen) begin
+            // CPU write: 32-bit to selected half
             if (cpu_dmem_odd)
                 dmem[cpu_dmem_idx][63:32] <= cpu_dmem_wdata;
             else
