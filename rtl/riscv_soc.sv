@@ -106,55 +106,78 @@ module riscv_soc (
     end
     
     // =========================================================================
-    // DMEM - Data Memory (8KB, shared between host and CPU)
+    // DMEM - Data Memory (8KB, 64-bit wide)
     // =========================================================================
+    //
+    // 64-bit wide memory simplifies host access (single 64-bit AXI transaction)
+    // CPU accesses 32-bit words within the 64-bit entries
+    //
+    // Memory layout: 1024 x 64-bit = 8KB
+    // Host address mapping:
+    //   0x2000 -> dmem[0] (64-bit)
+    //   0x2008 -> dmem[1] (64-bit)
+    //   etc.
+    // CPU address mapping (32-bit words):
+    //   addr=0x0 -> dmem[0][31:0]   (even word)
+    //   addr=0x4 -> dmem[0][63:32]  (odd word)
+    //   addr=0x8 -> dmem[1][31:0]
+    //   etc.
     
-    (* ramstyle = "no_rw_check, M20K" *) logic [31:0] dmem [0:2047];  // 2048 x 32-bit = 8KB
-    logic [31:0] dmem_host_rdata;    // Registered read for host access
+    (* ramstyle = "no_rw_check, M20K" *) logic [63:0] dmem [0:1023];  // 1024 x 64-bit = 8KB
     
     // CPU port signals
-    logic [31:0] cpu_dmem_addr;      // Address from MEM stage
-    logic [31:0] cpu_dmem_wdata;     // Write data from MEM stage
-    logic [31:0] cpu_dmem_rdata;     // Read data to MEM stage
+    logic [31:0] cpu_dmem_addr;      // Byte address from MEM stage
+    logic [31:0] cpu_dmem_wdata;     // Write data from MEM stage (32-bit)
+    logic [31:0] cpu_dmem_rdata;     // Read data to MEM stage (32-bit)
     logic        cpu_dmem_we;        // Write enable from MEM stage
     
-    // Address indexing
-    wire [10:0] cpu_dmem_idx  = cpu_dmem_addr[12:2];
+    // Address indexing for CPU (32-bit word access within 64-bit entry)
+    wire [9:0]  cpu_dmem_idx   = cpu_dmem_addr[12:3];  // 64-bit entry index
+    wire        cpu_dmem_odd   = cpu_dmem_addr[2];     // Which 32-bit half (0=low, 1=high)
+    
+    // Host address indexing (64-bit aligned)
+    wire [9:0]  host_dmem_idx  = bar_addr[12:3];
     
     // Debug: capture last CPU DMEM write
     logic [31:0] dbg_cpu_dmem_addr;
     logic [31:0] dbg_cpu_dmem_wdata;
     logic [31:0] dbg_cpu_dmem_count;
     
-    // DMEM write - single write port with muxed address/data
-    // Host has priority over CPU
+    // Write enables
     wire host_dmem_wen = bar_wen && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3);
     wire cpu_dmem_wen = cpu_dmem_we && cpu_running && !host_dmem_wen;
-    wire dmem_wen = host_dmem_wen || cpu_dmem_wen;
     
-    // Mux address and data based on who is writing
-    wire [10:0] dmem_waddr = host_dmem_wen ? bar_addr[12:2] : cpu_dmem_idx;
-    wire [31:0] dmem_wdata = host_dmem_wen ? bar_wdata[31:0] : cpu_dmem_wdata;
-    
-    // Single write port for DMEM
+    // Host write port - full 64-bit write
     always_ff @(posedge clk) begin
-        if (dmem_wen) begin
-            dmem[dmem_waddr] <= dmem_wdata;
+        if (host_dmem_wen) begin
+            dmem[host_dmem_idx] <= bar_wdata;
         end
     end
     
-    // Debug capture for CPU writes (separate always_ff)
-    logic [10:0] dbg_dmem_waddr;   // Actual muxed write address
-    logic [31:0] dbg_dmem_wdata_m; // Actual muxed write data
-    logic        dbg_host_wen;     // Was host_dmem_wen true during write?
-    logic        dbg_dmem_wen;     // Was dmem_wen true during CPU write?
+    // CPU write port - 32-bit write to either half
+    always_ff @(posedge clk) begin
+        if (cpu_dmem_wen) begin
+            if (cpu_dmem_odd)
+                dmem[cpu_dmem_idx][63:32] <= cpu_dmem_wdata;
+            else
+                dmem[cpu_dmem_idx][31:0] <= cpu_dmem_wdata;
+        end
+    end
+    
+    // Debug capture for CPU writes
+    logic [9:0]  dbg_dmem_idx;
+    logic        dbg_dmem_odd;
+    logic [31:0] dbg_dmem_wdata_m;
+    logic        dbg_host_wen;
+    logic        dbg_dmem_wen;
     
     always_ff @(posedge clk) begin
         if (~rst_n) begin
             dbg_cpu_dmem_addr <= 32'h0;
             dbg_cpu_dmem_wdata <= 32'h0;
             dbg_cpu_dmem_count <= 32'h0;
-            dbg_dmem_waddr <= 11'h0;
+            dbg_dmem_idx <= 10'h0;
+            dbg_dmem_odd <= 1'b0;
             dbg_dmem_wdata_m <= 32'h0;
             dbg_host_wen <= 1'b0;
             dbg_dmem_wen <= 1'b0;
@@ -162,41 +185,39 @@ module riscv_soc (
             dbg_cpu_dmem_addr <= cpu_dmem_addr;
             dbg_cpu_dmem_wdata <= cpu_dmem_wdata;
             dbg_cpu_dmem_count <= dbg_cpu_dmem_count + 1;
-            // Capture actual muxed values and enables
-            dbg_dmem_waddr <= dmem_waddr;
-            dbg_dmem_wdata_m <= dmem_wdata;
+            dbg_dmem_idx <= cpu_dmem_idx;
+            dbg_dmem_odd <= cpu_dmem_odd;
+            dbg_dmem_wdata_m <= cpu_dmem_wdata;
             dbg_host_wen <= host_dmem_wen;
-            dbg_dmem_wen <= dmem_wen;
+            dbg_dmem_wen <= 1'b1;
         end
     end
     
-    // CPU read port (combinational for same-cycle read in MEM stage)
-    assign cpu_dmem_rdata = dmem[cpu_dmem_idx];
+    // CPU read port - 32-bit from selected half (combinational)
+    assign cpu_dmem_rdata = cpu_dmem_odd ? dmem[cpu_dmem_idx][63:32] : dmem[cpu_dmem_idx][31:0];
     
-    // Host read port (registered, single 32-bit word)
-    // DMEM is at 0x2000-0x3FFF (bar_addr[15:12] = 4'h2 or 4'h3)
+    // Host read port - full 64-bit (registered)
+    logic [63:0] dmem_host_rdata;
     always_ff @(posedge clk) begin
         if (bar_ren && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3)) begin
-            dmem_host_rdata <= dmem[bar_addr[12:2]];
+            dmem_host_rdata <= dmem[host_dmem_idx];
         end
     end
     
     // Initialize to zero
     initial begin
-        for (int i = 0; i < 2048; i++)
-            dmem[i] = 32'h0;
+        for (int i = 0; i < 1024; i++)
+            dmem[i] = 64'h0;
     end
     
     // =========================================================================
     // BAR Read Multiplexer
     // =========================================================================
     
-    // Registered direct dmem reads for debug (avoid multi-port inference issues)
-    logic [31:0] dbg_dmem0_reg;
-    logic [31:0] dbg_dmem1_reg;
+    // Registered direct dmem reads for debug
+    logic [63:0] dbg_dmem0_reg;
     always_ff @(posedge clk) begin
         dbg_dmem0_reg <= dmem[0];
-        dbg_dmem1_reg <= dmem[1];
     end
 
     always_comb begin
@@ -212,16 +233,15 @@ module riscv_soc (
                     5'd4: bar_rdata = {32'b0, dbg_cpu_dmem_addr};     // 0x20: DBG_CPU_ADDR
                     5'd5: bar_rdata = {32'b0, dbg_cpu_dmem_wdata};    // 0x28: DBG_CPU_WDATA
                     5'd6: bar_rdata = {32'b0, dbg_cpu_dmem_count};    // 0x30: DBG_CPU_COUNT
-                    5'd7: bar_rdata = {32'b0, 21'b0, dbg_dmem_waddr}; // 0x38: DBG_MUX_ADDR
+                    5'd7: bar_rdata = {32'b0, 22'b0, dbg_dmem_idx};   // 0x38: DBG_IDX
                     5'd8: bar_rdata = {32'b0, dbg_dmem_wdata_m};      // 0x40: DBG_MUX_DATA
-                    5'd9: bar_rdata = {62'b0, dbg_dmem_wen, dbg_host_wen}; // 0x48: DBG_FLAGS
-                    5'd10: bar_rdata = {32'b0, dbg_dmem0_reg};        // 0x50: DMEM[0] registered
-                    5'd11: bar_rdata = {32'b0, dbg_dmem1_reg};        // 0x58: DMEM[1] registered
+                    5'd9: bar_rdata = {61'b0, dbg_dmem_odd, dbg_dmem_wen, dbg_host_wen}; // 0x48: DBG_FLAGS
+                    5'd10: bar_rdata = dbg_dmem0_reg;                 // 0x50: DMEM[0] full 64-bit
                     default: bar_rdata = 64'h0;
                 endcase
             end
             4'h1:        bar_rdata = {32'b0, imem_host_rdata};  // IMEM (32-bit)
-            4'h2, 4'h3:  bar_rdata = {32'b0, dmem_host_rdata};  // DMEM (32-bit)
+            4'h2, 4'h3:  bar_rdata = dmem_host_rdata;           // DMEM (full 64-bit)
             default:     bar_rdata = 64'h0;
         endcase
     end
