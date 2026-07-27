@@ -270,17 +270,22 @@ module axi_core_hw(
   
   // Sniffer control register
   logic sniffer_enable;
-  logic sniffer_clear;
+  logic sniffer_clear_req;   // Request from host write
+  logic sniffer_clear;       // Actual clear signal (delayed by 1 cycle)
   
   always_ff @(posedge clk) begin
     if (rst) begin
       sniffer_enable <= 1'b1;  // Enabled by default
+      sniffer_clear_req <= 1'b0;
       sniffer_clear <= 1'b0;
     end else begin
-      sniffer_clear <= 1'b0;  // Auto-clear
+      // Delay the clear request by one cycle so bus_sniffer sees it
+      sniffer_clear <= sniffer_clear_req;
+      sniffer_clear_req <= 1'b0;  // Auto-clear request
+      
       if (soc_wen && is_sniffer_addr && soc_addr[7:0] == 8'h08) begin
         sniffer_enable <= soc_wdata[0];
-        sniffer_clear <= soc_wdata[1];
+        sniffer_clear_req <= soc_wdata[1];
       end
     end
   end

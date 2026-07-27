@@ -404,17 +404,22 @@ module riscv_soc (
     
     // CPU logger control register
     logic cpulog_enable;
-    logic cpulog_clear;
+    logic cpulog_clear_req;   // Request from host write
+    logic cpulog_clear;       // Actual clear signal (delayed by 1 cycle)
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (~rst_n) begin
             cpulog_enable <= 1'b1;  // Enabled by default
+            cpulog_clear_req <= 1'b0;
             cpulog_clear <= 1'b0;
         end else begin
-            cpulog_clear <= 1'b0;  // Auto-clear
+            // Delay the clear request by one cycle so cpu_logger sees it
+            cpulog_clear <= cpulog_clear_req;
+            cpulog_clear_req <= 1'b0;  // Auto-clear request
+            
             if (wen && addr[15:12] == 4'h5 && addr[7:0] == 8'h08) begin
                 cpulog_enable <= wdata[0];
-                cpulog_clear <= wdata[1];
+                cpulog_clear_req <= wdata[1];
             end
         end
     end
