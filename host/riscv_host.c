@@ -16,7 +16,9 @@
 #define BAR_STATUS    0x0008   // [0] RUNNING
 #define BAR_PC        0x0010   // Current PC
 #define BAR_IMEM      0x1000   // Instruction memory (4KB)
-#define BAR_DMEM      0x2000   // Data memory (8KB, 64-bit wide)
+#define BAR_DMEM      0x2000   // Data memory (8KB)
+#define BAR_SNIFFER   0x4000   // Bus sniffer logs
+#define BAR_CPULOG    0x5000   // CPU logger logs
 
 // Control bits
 #define CTRL_RUN      (1 << 0)
@@ -254,9 +256,58 @@ int main(int argc, char *argv[]) {
 
     if (result == 8) {
         printf("\n=== TEST PASSED ===\n");
-        return 0;
     } else {
         printf("\n=== TEST FAILED ===\n");
-        return 1;
     }
+    
+    // =========================================================================
+    // Read Bus Sniffer Logs
+    // =========================================================================
+    printf("\n=== Bus Sniffer Log (host transactions) ===\n");
+    uint32_t sniff_count = read32(BAR_SNIFFER + 0x00);
+    uint32_t sniff_cycle = read32(BAR_SNIFFER + 0x04);
+    printf("Total transactions: %u, Current cycle: %u\n", sniff_count, sniff_cycle);
+    
+    int sniff_entries = (sniff_count < 8) ? sniff_count : 8;
+    for (int i = 0; i < sniff_entries; i++) {
+        uint32_t base = BAR_SNIFFER + 0x10 + i * 0x10;
+        uint32_t w0 = read32(base + 0x00);
+        uint32_t w1 = read32(base + 0x04);
+        uint32_t w2 = read32(base + 0x08);
+        
+        uint32_t type = w0 & 1;
+        uint32_t timestamp = w1 & 0xFFFF;
+        uint32_t addr = w1 >> 16;
+        uint32_t data = w2;
+        
+        printf("  [%d] cycle=%4u %s addr=0x%04X data=0x%08X\n",
+               i, timestamp, type ? "WR" : "RD", addr, data);
+    }
+    
+    // =========================================================================
+    // Read CPU Logger Logs
+    // =========================================================================
+    printf("\n=== CPU Logger (CPU memory accesses) ===\n");
+    uint32_t cpu_count = read32(BAR_CPULOG + 0x00);
+    uint32_t cpu_cycle = read32(BAR_CPULOG + 0x04);
+    printf("Total accesses: %u, Current cycle: %u\n", cpu_count, cpu_cycle);
+    
+    const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
+    int cpu_entries = (cpu_count < 10) ? cpu_count : 10;
+    for (int i = 0; i < cpu_entries; i++) {
+        uint32_t base = BAR_CPULOG + 0x10 + i * 0x10;
+        uint32_t w0 = read32(base + 0x00);
+        uint32_t w1 = read32(base + 0x04);
+        uint32_t w2 = read32(base + 0x08);
+        
+        uint32_t type = w0 & 3;
+        uint32_t timestamp = (w0 >> 16) & 0xFFFF;
+        uint32_t addr = w1;
+        uint32_t data = w2;
+        
+        printf("  [%2d] cycle=%4u %s addr=0x%08X data=0x%08X\n",
+               i, timestamp, type_names[type], addr, data);
+    }
+
+    return (result == 8) ? 0 : 1;
 }

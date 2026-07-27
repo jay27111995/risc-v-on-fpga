@@ -7,11 +7,19 @@
 //   0x0000-0x00FF  Control registers
 //   0x1000-0x1FFF  IMEM - 4KB instruction memory (32-bit)
 //   0x2000-0x3FFF  DMEM - 8KB data memory (32-bit)
+//   0x4000-0x4FFF  Bus sniffer logs (in axi_core_hw)
+//   0x5000-0x5FFF  CPU logger logs
 //
 // Control Registers:
 //   0x00  CTRL    [0] RUN, [1] RESET
 //   0x08  STATUS  [0] RUNNING
 //   0x10  PC      Current program counter
+//
+// CPU Logger Registers (0x5xxx):
+//   0x5000  LOG_COUNT   Total transactions logged
+//   0x5004  LOG_CYCLE   Current cycle count
+//   0x5010  ENTRY[0]    Newest log entry (3 words: data, addr, timestamp|type)
+//   0x5020  ENTRY[1]    Second newest, etc.
 //
 // ============================================================================
 
@@ -139,6 +147,7 @@ module riscv_soc (
             end
             4'h1:        rdata = imem_host_rdata;
             4'h2, 4'h3:  rdata = dmem_host_rdata;
+            4'h5:        rdata = cpu_logger_rdata;  // CPU logger
             default:     rdata = 32'h0;
         endcase
     end
@@ -382,5 +391,65 @@ module riscv_soc (
     // =========================================================================
     
     assign wb_rd_data = wb_mem_read ? wb_load_data : wb_alu_result;
+
+    // =========================================================================
+    // CPU Logger (logs CPU memory accesses for debug)
+    // =========================================================================
+    //
+    // Accessible at addr 0x5xxx:
+    //   0x5000 = log_count, 0x5004 = log_cycle
+    //   0x5010 = entry[0] bits[31:0],  0x5014 = entry[0] bits[63:32], 0x5018 = entry[0] bits[95:64]
+    //   0x5020 = entry[1] bits[31:0],  etc.
+    
+    wire [4:0]  cpu_log_idx = addr[6:2] - 5'd4;  // Entry 0 at 0x5010, entry 1 at 0x5020
+    wire [95:0] cpu_log_entry;
+    wire [31:0] cpu_log_count;
+    wire [31:0] cpu_log_cycle;
+    
+    cpu_logger #(
+        .LOG_DEPTH(32)
+    ) u_cpu_logger (
+        .clk        (clk),
+        .rst_n      (rst_n),
+        
+        // IMEM fetch
+        .imem_addr  (if_pc),
+        .imem_rdata (if_instr),
+        .imem_valid (cpu_running && !stall),
+        
+        // DMEM access
+        .dmem_addr  (cpu_dmem_addr),
+        .dmem_wdata (cpu_dmem_wdata),
+        .dmem_rdata (cpu_dmem_rdata),
+        .dmem_wen   (cpu_dmem_we),
+        .dmem_ren   (mem_mem_read && mem_valid && cpu_running),
+        
+        // Log read interface
+        .log_idx    (cpu_log_idx),
+        .log_entry  (cpu_log_entry),
+        .log_count  (cpu_log_count),
+        .log_cycle  (cpu_log_cycle)
+    );
+    
+    // CPU logger read data mux
+    logic [31:0] cpu_logger_rdata;
+    always_comb begin
+        if (addr[7:4] == 4'h0) begin
+            // Control registers
+            case (addr[3:2])
+                2'd0: cpu_logger_rdata = cpu_log_count;
+                2'd1: cpu_logger_rdata = cpu_log_cycle;
+                default: cpu_logger_rdata = 32'h0;
+            endcase
+        end else begin
+            // Log entries
+            case (addr[3:2])
+                2'd0: cpu_logger_rdata = cpu_log_entry[31:0];
+                2'd1: cpu_logger_rdata = cpu_log_entry[63:32];
+                2'd2: cpu_logger_rdata = cpu_log_entry[95:64];
+                default: cpu_logger_rdata = 32'h0;
+            endcase
+        end
+    end
 
 endmodule
