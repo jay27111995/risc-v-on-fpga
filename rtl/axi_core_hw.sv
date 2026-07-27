@@ -422,16 +422,16 @@ module axi_core_hw(
   wire [63:0] soc_rdata;
   
   // Address mux for SoC: write address during write, read address otherwise
-  wire [15:0] bar_addr_soc = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
+  wire [15:0] soc_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
   
   riscv_soc u_soc(
     .clk(clk),
     .rst_n(~rst),
-    .bar_addr(bar_addr_soc),
-    .bar_wdata(bar_wdata),
-    .bar_wen(bar_wen),
-    .bar_ren(bar_ren),
-    .bar_rdata(soc_rdata)
+    .addr(soc_addr),
+    .wdata(bar_wdata),
+    .wen(bar_wen),
+    .ren(bar_ren),
+    .rdata(soc_rdata)
   );
   
   // =========================================================================
