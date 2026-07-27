@@ -287,7 +287,7 @@ int main(int argc, char *argv[]) {
         uint32_t base = BAR_SNIFFER + 0x10 + i * 0x10;
         uint32_t w0 = read32(base + 0x00);  // [31:0]: type at bit 0
         uint32_t w1 = read32(base + 0x04);  // [63:32]: addr[15:0]<<16 | timestamp[15:0]
-        uint32_t w2 = read32(base + 0x08);  // [95:64]: padding (0)
+        (void)read32(base + 0x08);          // [95:64]: padding (unused)
         uint32_t w3 = read32(base + 0x0C);  // [127:96]: data
         
         uint32_t type = w0 & 1;
