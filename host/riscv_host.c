@@ -292,7 +292,7 @@ int main(int argc, char *argv[]) {
     printf("Total transactions: %u, Current cycle: %u\n", sniff_count, sniff_cycle);
     
     int sniff_entries = (sniff_count < 32) ? sniff_count : 32;  // Show up to 32
-    for (int i = 0; i < sniff_entries; i++) {
+    for (int i = sniff_entries - 1; i >= 0; i--) {  // Show oldest first
         uint32_t base = BAR_SNIFFER + 0x10 + i * 0x10;
         uint32_t w0 = read32(base + 0x00);  // [31:0]: type at bit 0
         uint32_t w1 = read32(base + 0x04);  // [63:32]: addr[15:0]<<16 | timestamp[15:0]
@@ -317,8 +317,8 @@ int main(int argc, char *argv[]) {
     printf("Total accesses: %u, Current cycle: %u\n", cpu_count, cpu_cycle);
     
     const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
-    int cpu_entries = (cpu_count < 10) ? cpu_count : 10;
-    for (int i = 0; i < cpu_entries; i++) {
+    int cpu_entries = (cpu_count < 32) ? cpu_count : 32;  // Show up to 32
+    for (int i = cpu_entries - 1; i >= 0; i--) {  // Show oldest first
         uint32_t base = BAR_CPULOG + 0x10 + i * 0x10;
         uint32_t w0 = read32(base + 0x00);  // [31:0]: timestamp[31:16], reserved[15:2], type[1:0]
         uint32_t w1 = read32(base + 0x04);  // [63:32]: address
