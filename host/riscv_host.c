@@ -287,7 +287,7 @@ int main(int argc, char *argv[]) {
     uint32_t sniff_cycle = read32(BAR_SNIFFER + 0x04);
     printf("Total transactions: %u, Current cycle: %u\n", sniff_count, sniff_cycle);
     
-    int sniff_entries = (sniff_count < 16) ? sniff_count : 16;  // Show up to 16
+    int sniff_entries = (sniff_count < 32) ? sniff_count : 32;  // Show up to 32
     for (int i = 0; i < sniff_entries; i++) {
         uint32_t base = BAR_SNIFFER + 0x10 + i * 0x10;
         uint32_t w0 = read32(base + 0x00);  // [31:0]: type at bit 0
