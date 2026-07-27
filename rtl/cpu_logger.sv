@@ -94,8 +94,10 @@ module cpu_logger #(
         end else if (log_enable) begin
             prev_imem_valid <= imem_valid;
             
-            // Log IMEM fetch (only when address changes or first valid)
-            if (imem_valid && (imem_addr != prev_imem_addr || !prev_imem_valid)) begin
+            // Log IMEM fetch (only when address changes AND not a NOP)
+            // NOP = addi x0, x0, 0 = 0x00000013
+            if (imem_valid && (imem_addr != prev_imem_addr || !prev_imem_valid) 
+                && imem_rdata != 32'h00000013) begin
                 prev_imem_addr <= imem_addr;
                 log_mem[log_wr_ptr] <= {
                     imem_rdata,             // [95:64] - instruction
