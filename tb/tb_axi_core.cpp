@@ -223,11 +223,11 @@ int main(int argc, char** argv) {
     printf("  Total transactions: %u, Current cycle: %u\n", sniff_count, sniff_cycle);
     
     int sniff_entries = (sniff_count < 8) ? sniff_count : 8;  // Show up to 8
-    for (int i = 0; i < sniff_entries; i++) {
+    for (int i = sniff_entries - 1; i >= 0; i--) {  // Show oldest first
         uint32_t base = 0x4010 + i * 0x10;
         uint32_t w0 = (uint32_t)tb.axi_read(base + 0x00);  // [31:0]: type at bit 0
         uint32_t w1 = (uint32_t)tb.axi_read(base + 0x04);  // [63:32]: addr[15:0]<<16 | timestamp[15:0]
-        uint32_t w2 = (uint32_t)tb.axi_read(base + 0x08);  // [95:64]: padding (0)
+        (void)tb.axi_read(base + 0x08);                    // [95:64]: padding (unused)
         uint32_t w3 = (uint32_t)tb.axi_read(base + 0x0C);  // [127:96]: data
         
         // Parse entry
@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
     
     int cpu_entries = (cpu_count < 32) ? cpu_count : 32;  // Show up to 32
     const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
-    for (int i = 0; i < cpu_entries; i++) {
+    for (int i = cpu_entries - 1; i >= 0; i--) {  // Show oldest first
         uint32_t base = 0x5010 + i * 0x10;
         uint32_t w0 = (uint32_t)tb.axi_read(base + 0x00);  // entry[31:0]
         uint32_t w1 = (uint32_t)tb.axi_read(base + 0x04);  // entry[63:32]

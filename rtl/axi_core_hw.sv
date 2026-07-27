@@ -326,7 +326,7 @@ module axi_core_hw(
   wire is_sniffer_addr = (soc_addr[15:12] == 4'h4);
   
   bus_sniffer #(
-    .LOG_DEPTH(16)
+    .LOG_DEPTH(32)
   ) u_sniffer (
     .clk       (clk),
     .rst_n     (~rst),
