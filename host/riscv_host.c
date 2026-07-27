@@ -217,6 +217,10 @@ int main(int argc, char *argv[]) {
     cpu_reset();
     printf("Loading %zu instructions...\n", prog_len);
     load_program(program, prog_len);
+    
+    // Stop sniffer to preserve IMEM writes
+    write32(BAR_SNIFFER + 0x08, 0x01);  // Disable but keep data (enable=1, clear=0... wait no)
+    write32(BAR_SNIFFER + 0x08, 0x00);  // Disable sniffer
 
     // Verify IMEM
     printf("\nVerifying IMEM:\n");
