@@ -141,6 +141,11 @@ int main(int argc, char** argv) {
     };
     const int program_size = sizeof(program) / sizeof(program[0]);
     
+    // Clear bus sniffer BEFORE loading program
+    printf("Clearing bus sniffer...\n");
+    tb.axi_write(0x4008, 0x03);  // Clear + enable sniffer
+    for (int i = 0; i < 5; i++) tb.tick();
+    
     // Load Program to IMEM
     printf("Loading program to IMEM...\n");
     for (int i = 0; i < program_size; i += 2) {
@@ -153,6 +158,9 @@ int main(int argc, char** argv) {
         }
     }
     printf("  Loaded %d instructions\n\n", program_size);
+    
+    // Stop bus sniffer - we've captured the IMEM writes
+    tb.axi_write(0x4008, 0x00);  // Disable sniffer
     for (int i = 0; i < 10; i++) tb.tick();
     
     // Verify IMEM
@@ -171,21 +179,18 @@ int main(int argc, char** argv) {
     tb.axi_write(0x00, 0x02);  // RESET
     for (int i = 0; i < 10; i++) tb.tick();
     
-    // Clear logs before starting CPU
-    printf("Clearing logs...\n");
-    tb.axi_write(0x4008, 0x03);  // Clear + enable sniffer
+    // Clear CPU logger and run CPU for FEWER cycles to see the DSTORE
+    printf("Clearing CPU logger...\n");
     tb.axi_write(0x5008, 0x03);  // Clear + enable CPU logger
-    for (int i = 0; i < 5; i++) tb.tick();
+    for (int i = 0; i < 2; i++) tb.tick();
     
     printf("Starting CPU...\n");
     tb.axi_write(0x00, 0x01);  // RUN
-    for (int i = 0; i < 10; i++) tb.tick();
     
-    printf("Running for 10 cycles...\n");
-    for (int i = 0; i < 10; i++) tb.tick();
+    printf("Running for 8 cycles (enough for 5 instructions + store)...\n");
+    for (int i = 0; i < 8; i++) tb.tick();
     
-    // Stop logging before reading results
-    tb.axi_write(0x4008, 0x00);  // Disable sniffer
+    // Stop logging immediately
     tb.axi_write(0x5008, 0x00);  // Disable CPU logger
     
     tb.axi_write(0x00, 0x00);  // STOP
@@ -220,26 +225,19 @@ int main(int argc, char** argv) {
     int sniff_entries = (sniff_count < 8) ? sniff_count : 8;  // Show up to 8
     for (int i = 0; i < sniff_entries; i++) {
         uint32_t base = 0x4010 + i * 0x10;
-        uint32_t w0 = (uint32_t)tb.axi_read(base + 0x00);  // entry[31:0]
-        uint32_t w1 = (uint32_t)tb.axi_read(base + 0x04);  // entry[63:32]
-        uint32_t w2 = (uint32_t)tb.axi_read(base + 0x08);  // entry[95:64]
-        uint32_t w3 = (uint32_t)tb.axi_read(base + 0x0C);  // entry[127:96]
+        uint32_t w0 = (uint32_t)tb.axi_read(base + 0x00);  // [31:0]: type at bit 0
+        uint32_t w1 = (uint32_t)tb.axi_read(base + 0x04);  // [63:32]: addr[15:0]<<16 | timestamp[15:0]
+        uint32_t w2 = (uint32_t)tb.axi_read(base + 0x08);  // [95:64]: padding (0)
+        uint32_t w3 = (uint32_t)tb.axi_read(base + 0x0C);  // [127:96]: data
         
-        // Parse entry: [127:64]=data, [63:48]=addr, [47:32]=timestamp, [0]=type
+        // Parse entry
         uint32_t type = w0 & 1;
         uint32_t timestamp = w1 & 0xFFFF;
-        uint32_t addr = (w1 >> 16) | ((w2 & 0xFFFF) << 16);
-        uint64_t data = ((uint64_t)w3 << 32) | (w2 >> 16) | ((uint64_t)(w2 & 0xFFFF0000));
-        // Actually entry format is: [127:64]=data, [63:48]=addr, [47:32]=timestamp, [0]=type
-        // So: w0=[31:0], w1=[63:32], w2=[95:64], w3=[127:96]
-        // type = w0[0], timestamp = w1[15:0], addr = w1[31:16], data = {w3, w2}
-        type = w0 & 1;
-        timestamp = w1 & 0xFFFF;
-        addr = w1 >> 16;
-        data = ((uint64_t)w3 << 32) | w2;
+        uint32_t addr = w1 >> 16;
+        uint32_t data = w3;  // Data is in the high word
         
-        printf("  [%d] cycle=%4u %s addr=0x%04X data=0x%08X\n",
-               i, timestamp, type ? "WR" : "RD", addr, (uint32_t)data);
+        printf("  [%d] cycle=%5u %s addr=0x%04X data=0x%08X\n",
+               i, timestamp, type ? "WR" : "RD", addr, data);
     }
     
     printf("\n");
