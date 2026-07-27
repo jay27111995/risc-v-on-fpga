@@ -9,8 +9,9 @@
 //   log_clear  - pulse high to reset log pointer and count
 //
 // Transaction log entry (128 bits):
-//   [127:64] - data (write data or read data)
-//   [63:48]  - address
+//   [127:96] - data (write data or read data, 32-bit)
+//   [95:64]  - padding (zero)
+//   [63:48]  - address (16-bit)
 //   [47:32]  - timestamp (lower 16 bits of cycle counter)
 //   [31:1]   - reserved
 //   [0]      - type: 0=read, 1=write
