@@ -6,14 +6,31 @@
 #include "Vaxi_core_hw.h"
 #include "verilated.h"
 
+// Uncomment for VCD tracing:
+// #define TRACE_VCD
+#ifdef TRACE_VCD
+#include "verilated_vcd_c.h"
+#endif
+
 class AxiTestbench {
 public:
     Vaxi_core_hw* dut;
     uint64_t cycle;
+#ifdef TRACE_VCD
+    VerilatedVcdC* tfp;
+#endif
     
     AxiTestbench() {
         dut = new Vaxi_core_hw;
         cycle = 0;
+        
+#ifdef TRACE_VCD
+        // Enable tracing
+        Verilated::traceEverOn(true);
+        tfp = new VerilatedVcdC;
+        dut->trace(tfp, 99);
+        tfp->open("trace.vcd");
+#endif
         
         // Initialize signals
         dut->clk = 0;
@@ -32,6 +49,9 @@ public:
     }
     
     ~AxiTestbench() {
+#ifdef TRACE_VCD
+        tfp->close();
+#endif
         dut->final();
         delete dut;
     }
@@ -39,8 +59,14 @@ public:
     void tick() {
         dut->clk = 0;
         dut->eval();
+#ifdef TRACE_VCD
+        tfp->dump(cycle * 10);
+#endif
         dut->clk = 1;
         dut->eval();
+#ifdef TRACE_VCD
+        tfp->dump(cycle * 10 + 5);
+#endif
         cycle++;
     }
     
