@@ -4,8 +4,8 @@
 // AXI Core Hardware Wrapper
 // ============================================================================
 //
-// Bridges PCIe AXI-Lite (64-bit) to RISC-V SoC.
-// Converts 64-bit AXI transactions to two sequential 32-bit SoC accesses.
+// Bridges PCIe AXI-Lite (64-bit) to RISC-V SoC (32-bit).
+// Uses bus64to32 adapter for clean 64-bit to 32-bit conversion.
 //
 // ============================================================================
 
@@ -82,165 +82,187 @@ module axi_core_hw(
   // AXI-Lite Slave - Read Channel
   // =========================================================================
   //
-  // Converts 64-bit AXI read to two sequential 32-bit SoC reads:
-  //   R_S0: Idle, wait for arvalid
-  //   R_S1: Accept address (arready)
-  //   R_S2: Read even word from SoC
-  //   R_S3: Capture even word
-  //   R_S4: Read odd word from SoC (addr+4)
-  //   R_S5: Capture odd word
-  //   R_S6: Return combined 64-bit (rvalid)
-  //   R_S7: Done
+  // State machine:
+  //   R_IDLE:  Wait for arvalid
+  //   R_ADDR:  Accept address (arready), capture it
+  //   R_WAIT:  Wait for bus64to32 to complete (adapter_done)
+  //   R_RESP:  Return data (rvalid), wait for rready
+  //   R_DONE:  One cycle delay before next transaction
 
-  typedef enum {R_S0, R_S1, R_S2, R_S3, R_S4, R_S5, R_S6, R_S7} r_state_t;
-  r_state_t next_r_state, r_state;
+  typedef enum logic [2:0] {R_IDLE, R_ADDR, R_WAIT, R_RESP, R_DONE} r_state_t;
+  r_state_t r_state;
+
+  // Captured read address
+  logic [15:0] r_addr_reg;
 
   always_ff @(posedge clk) begin
-    if (rst) r_state <= R_S0;
-    else r_state <= next_r_state;
+    if (rst) begin
+      r_state <= R_IDLE;
+      r_addr_reg <= 16'h0;
+    end else begin
+      case (r_state)
+        R_IDLE: begin
+          if (axi_lite_s_arvalid)
+            r_state <= R_ADDR;
+        end
+        R_ADDR: begin
+          // Capture address, move to wait
+          r_addr_reg <= axi_lite_s_araddr[15:0];
+          r_state <= R_WAIT;
+        end
+        R_WAIT: begin
+          // Wait for adapter to complete
+          if (adapter_done)
+            r_state <= R_RESP;
+        end
+        R_RESP: begin
+          // Hold rvalid until rready
+          if (axi_lite_s_rready)
+            r_state <= R_DONE;
+        end
+        R_DONE: begin
+          r_state <= R_IDLE;
+        end
+      endcase
+    end
   end
 
-  always_comb begin
-    next_r_state = r_state;
-    axi_lite_s_arready = 0;
-    axi_lite_s_rvalid = 0;
-    case (r_state)
-      R_S0: if (axi_lite_s_arvalid) next_r_state = R_S1;
-      R_S1: begin
-        axi_lite_s_arready = 1;
-        next_r_state = R_S2;
-      end
-      R_S2: next_r_state = R_S3;
-      R_S3: next_r_state = R_S4;
-      R_S4: next_r_state = R_S5;
-      R_S5: next_r_state = R_S6;
-      R_S6: begin
-        axi_lite_s_rvalid = 1;
-        if (axi_lite_s_rready) next_r_state = R_S7;
-      end
-      R_S7: next_r_state = R_S0;
-    endcase
-  end
-
-  // Capture read address
-  logic [21:0] bar_raddr_base;
-  always_ff @(posedge clk) begin
-    if (r_state == R_S0 && axi_lite_s_arvalid)
-      bar_raddr_base <= axi_lite_s_araddr[21:0];
-  end
-  
-  // Read address: even in R_S2/R_S3, odd (addr+4) in R_S4/R_S5
-  wire [21:0] bar_raddr = ((r_state == R_S4) || (r_state == R_S5)) ? 
-                          (bar_raddr_base + 22'd4) : bar_raddr_base;
-  
-  // Capture read data
-  logic [31:0] rdata_even;
-  logic [31:0] rdata_odd;
+  // Read channel outputs
+  assign axi_lite_s_arready = (r_state == R_ADDR);
+  assign axi_lite_s_rvalid  = (r_state == R_RESP);
 
   // =========================================================================
   // AXI-Lite Slave - Write Channel
   // =========================================================================
   //
-  // Converts 64-bit AXI write to two sequential 32-bit SoC writes:
-  //   W_S0: Idle, wait for awvalid && wvalid
-  //   W_S1: Accept (awready/wready), capture address/data
-  //   W_S2: Write even word (lower 32 bits)
-  //   W_S3: Write odd word (upper 32 bits) at addr+4
-  //   W_S4: Return response (bvalid)
-  //   W_S5: Done
+  // State machine:
+  //   W_IDLE:  Wait for awvalid && wvalid
+  //   W_ADDR:  Accept address/data (awready/wready), capture them
+  //   W_WAIT:  Wait for bus64to32 to complete (adapter_done)
+  //   W_RESP:  Return response (bvalid), wait for bready
+  //   W_DONE:  One cycle delay before next transaction
 
-  typedef enum {W_S0, W_S1, W_S2, W_S3, W_S4, W_S5} w_state_t;
-  w_state_t next_w_state, w_state;
+  typedef enum logic [2:0] {W_IDLE, W_ADDR, W_WAIT, W_RESP, W_DONE} w_state_t;
+  w_state_t w_state;
 
-  always_ff @(posedge clk) begin
-    if (rst) w_state <= W_S0;
-    else w_state <= next_w_state;
-  end
+  // Captured write address and data
+  logic [15:0] w_addr_reg;
+  logic [63:0] w_data_reg;
+  logic        w_strb_valid;
 
-  always_comb begin
-    next_w_state = w_state;
-    axi_lite_s_awready = 0;
-    axi_lite_s_wready = 0;
-    axi_lite_s_bvalid = 0;
-    case (w_state)
-      W_S0: if (axi_lite_s_awvalid && axi_lite_s_wvalid) next_w_state = W_S1;
-      W_S1: begin
-        axi_lite_s_awready = 1;
-        axi_lite_s_wready = 1;
-        next_w_state = W_S2;
-      end
-      W_S2: next_w_state = W_S3;
-      W_S3: next_w_state = W_S4;
-      W_S4: begin
-        axi_lite_s_bvalid = 1;
-        if (axi_lite_s_bready) next_w_state = W_S5;
-      end
-      W_S5: next_w_state = W_S0;
-    endcase
-  end
-
-  // Capture write address and data
-  logic [21:0] bar_waddr_base;
-  logic [63:0] bar_wdata_captured;
-  logic        bar_wstrb_valid;
-  
   always_ff @(posedge clk) begin
     if (rst) begin
-      bar_wstrb_valid <= 1'b0;
-    end else if (w_state == W_S1) begin
-      bar_waddr_base <= axi_lite_s_awaddr[21:0];
-      bar_wdata_captured <= axi_lite_s_wdata;
-      bar_wstrb_valid <= (axi_lite_s_wstrb != 8'h00);
-    end else if (w_state == W_S5) begin
-      bar_wstrb_valid <= 1'b0;
+      w_state <= W_IDLE;
+      w_addr_reg <= 16'h0;
+      w_data_reg <= 64'h0;
+      w_strb_valid <= 1'b0;
+    end else begin
+      case (w_state)
+        W_IDLE: begin
+          if (axi_lite_s_awvalid && axi_lite_s_wvalid)
+            w_state <= W_ADDR;
+        end
+        W_ADDR: begin
+          // Capture address and data, move to wait
+          w_addr_reg <= axi_lite_s_awaddr[15:0];
+          w_data_reg <= axi_lite_s_wdata;
+          w_strb_valid <= (axi_lite_s_wstrb != 8'h00);
+          w_state <= W_WAIT;
+        end
+        W_WAIT: begin
+          // Wait for adapter to complete
+          if (adapter_done)
+            w_state <= W_RESP;
+        end
+        W_RESP: begin
+          // Hold bvalid until bready
+          if (axi_lite_s_bready)
+            w_state <= W_DONE;
+        end
+        W_DONE: begin
+          w_strb_valid <= 1'b0;
+          w_state <= W_IDLE;
+        end
+      endcase
+    end
+  end
+
+  // Write channel outputs
+  assign axi_lite_s_awready = (w_state == W_ADDR);
+  assign axi_lite_s_wready  = (w_state == W_ADDR);
+  assign axi_lite_s_bvalid  = (w_state == W_RESP);
+
+  // =========================================================================
+  // Bus 64-to-32 Adapter
+  // =========================================================================
+  //
+  // Request pulses: assert for one cycle when entering W_WAIT or R_WAIT
+  // The adapter captures addr/data on the same edge and starts processing.
+  
+  // Detect rising edge of WAIT states
+  logic w_wait_prev, r_wait_prev;
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      w_wait_prev <= 1'b0;
+      r_wait_prev <= 1'b0;
+    end else begin
+      w_wait_prev <= (w_state == W_WAIT);
+      r_wait_prev <= (r_state == R_WAIT);
     end
   end
   
-  // Write address: even in W_S2, odd (addr+4) in W_S3
-  wire [21:0] bar_waddr = (w_state == W_S3) ? (bar_waddr_base + 22'd4) : bar_waddr_base;
+  // Request pulses: first cycle of WAIT state
+  wire adapter_wen = (w_state == W_WAIT) && !w_wait_prev && w_strb_valid;
+  wire adapter_ren = (r_state == R_WAIT) && !r_wait_prev;
   
-  // Write data: lower 32 in W_S2, upper 32 in W_S3
-  wire [63:0] bar_wdata = (w_state == W_S3) ? {32'b0, bar_wdata_captured[63:32]} : 
-                                               {32'b0, bar_wdata_captured[31:0]};
+  // Address mux: write has priority
+  wire [15:0] adapter_addr = (w_state == W_WAIT) ? w_addr_reg : r_addr_reg;
   
-  // Write enable: pulse in W_S2 and W_S3
-  wire bar_wen = ((w_state == W_S2) || (w_state == W_S3)) && bar_wstrb_valid;
+  // Adapter signals
+  wire        adapter_done;
+  wire [63:0] adapter_rdata;
+  wire [15:0] soc_addr;
+  wire [31:0] soc_wdata;
+  wire        soc_wen;
+  wire        soc_ren;
+  wire [31:0] soc_rdata;
+
+  bus64to32 u_adapter (
+    .clk       (clk),
+    .rst_n     (~rst),
+    
+    // 64-bit side (from AXI state machine)
+    .in_addr   (adapter_addr),
+    .in_wdata  (w_data_reg),
+    .in_wen    (adapter_wen),
+    .in_ren    (adapter_ren),
+    .out_rdata (adapter_rdata),
+    .out_done  (adapter_done),
+    
+    // 32-bit side (to SoC)
+    .out_addr  (soc_addr),
+    .out_wdata (soc_wdata),
+    .out_wen   (soc_wen),
+    .out_ren   (soc_ren),
+    .in_rdata  (soc_rdata)
+  );
+
+  // Read data output
+  assign axi_lite_s_rdata = adapter_rdata;
 
   // =========================================================================
   // RISC-V SoC Instance
   // =========================================================================
-  
-  // Read enable
-  wire bar_ren = (r_state == R_S2) || (r_state == R_S4);
-  
-  // Address mux
-  wire [15:0] soc_addr = bar_wen ? bar_waddr[15:0] : bar_raddr[15:0];
-  
-  wire [63:0] soc_rdata;
-  
-  riscv_soc u_soc(
-    .clk(clk),
-    .rst_n(~rst),
-    .addr(soc_addr),
-    .wdata(bar_wdata),
-    .wen(bar_wen),
-    .ren(bar_ren),
-    .rdata(soc_rdata)
+
+  riscv_soc u_soc (
+    .clk    (clk),
+    .rst_n  (~rst),
+    .addr   (soc_addr),
+    .wdata  (soc_wdata),
+    .wen    (soc_wen),
+    .ren    (soc_ren),
+    .rdata  (soc_rdata)
   );
-  
-  // =========================================================================
-  // Read Data Capture
-  // =========================================================================
-  
-  always_ff @(posedge clk) begin
-    if (r_state == R_S3)
-      rdata_even <= soc_rdata[31:0];
-    if (r_state == R_S5)
-      rdata_odd <= soc_rdata[31:0];
-  end
-  
-  // Final AXI read response
-  assign axi_lite_s_rdata = {rdata_odd, rdata_even};
 
 endmodule
 

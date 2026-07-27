@@ -5,6 +5,8 @@
 // - Write: splits 64-bit write into two sequential 32-bit writes
 // - Read: combines two sequential 32-bit reads into 64-bit response
 //
+// Assumes downstream memory has 1-cycle read latency (registered output).
+//
 // Active-high handshake:
 // - req: host asserts to start transaction
 // - done: adapter asserts when transaction complete
@@ -34,13 +36,20 @@ module bus64to32 (
     // =========================================================================
     // State Machine
     // =========================================================================
+    //
+    // Write: IDLE -> W_LO -> W_HI -> DONE
+    // Read:  IDLE -> R_LO -> R_LO_CAP -> R_HI -> R_HI_CAP -> DONE
+    //
+    // R_LO_CAP and R_HI_CAP account for 1-cycle memory read latency.
     
     typedef enum logic [2:0] {
         IDLE,
         W_LO,       // Write lower 32 bits
         W_HI,       // Write upper 32 bits
-        R_LO,       // Read lower 32 bits
-        R_HI,       // Read upper 32 bits
+        R_LO,       // Read request for lower 32 bits
+        R_LO_CAP,   // Capture lower 32 bits (memory has 1-cycle latency)
+        R_HI,       // Read request for upper 32 bits
+        R_HI_CAP,   // Capture upper 32 bits
         DONE
     } state_t;
     
@@ -50,6 +59,7 @@ module bus64to32 (
     logic [15:0] addr_reg;
     logic [63:0] wdata_reg;
     logic [31:0] rdata_lo;
+    logic [31:0] rdata_hi;
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -57,18 +67,24 @@ module bus64to32 (
             addr_reg <= 16'h0;
             wdata_reg <= 64'h0;
             rdata_lo <= 32'h0;
+            rdata_hi <= 32'h0;
         end else begin
             state <= state_next;
             
-            // Capture request
+            // Capture request on IDLE
             if (state == IDLE && (in_wen || in_ren)) begin
                 addr_reg <= in_addr;
                 wdata_reg <= in_wdata;
             end
             
-            // Capture lower read data
-            if (state == R_LO) begin
+            // Capture lower read data (after 1-cycle latency)
+            if (state == R_LO_CAP) begin
                 rdata_lo <= in_rdata;
+            end
+            
+            // Capture upper read data (after 1-cycle latency)
+            if (state == R_HI_CAP) begin
+                rdata_hi <= in_rdata;
             end
         end
     end
@@ -77,13 +93,15 @@ module bus64to32 (
     always_comb begin
         state_next = state;
         case (state)
-            IDLE:   if (in_wen) state_next = W_LO;
-                    else if (in_ren) state_next = R_LO;
-            W_LO:   state_next = W_HI;
-            W_HI:   state_next = DONE;
-            R_LO:   state_next = R_HI;
-            R_HI:   state_next = DONE;
-            DONE:   state_next = IDLE;
+            IDLE:     if (in_wen) state_next = W_LO;
+                      else if (in_ren) state_next = R_LO;
+            W_LO:     state_next = W_HI;
+            W_HI:     state_next = DONE;
+            R_LO:     state_next = R_LO_CAP;  // Wait for read data
+            R_LO_CAP: state_next = R_HI;
+            R_HI:     state_next = R_HI_CAP;  // Wait for read data
+            R_HI_CAP: state_next = DONE;
+            DONE:     state_next = IDLE;
         endcase
     end
     
@@ -94,10 +112,10 @@ module bus64to32 (
     // Done signal
     assign out_done = (state == DONE);
     
-    // Read data: combine lower (captured) and upper (current)
-    assign out_rdata = {in_rdata, rdata_lo};
+    // Read data: combine captured lower and upper
+    assign out_rdata = {rdata_hi, rdata_lo};
     
-    // Downstream address and data
+    // Downstream address, data, and enables
     always_comb begin
         out_addr = 16'h0;
         out_wdata = 32'h0;
@@ -119,9 +137,15 @@ module bus64to32 (
                 out_addr = addr_reg;
                 out_ren = 1'b1;
             end
+            R_LO_CAP: begin
+                out_addr = addr_reg;  // Hold address for read mux
+            end
             R_HI: begin
                 out_addr = addr_reg + 16'd4;
                 out_ren = 1'b1;
+            end
+            R_HI_CAP: begin
+                out_addr = addr_reg + 16'd4;  // Hold address for read mux
             end
             default: ;
         endcase
