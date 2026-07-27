@@ -4,6 +4,10 @@
 // Passthrough module that captures transaction history for debug.
 // Stores last N transactions in a circular buffer readable via separate port.
 //
+// Control:
+//   log_enable - when high, logging is active; when low, logging paused
+//   log_clear  - pulse high to reset log pointer and count
+//
 // Transaction log entry (128 bits):
 //   [127:64] - data (write data or read data)
 //   [63:48]  - address
@@ -18,6 +22,10 @@ module bus_sniffer #(
 ) (
     input  logic        clk,
     input  logic        rst_n,
+    
+    // Control
+    input  logic        log_enable,    // Enable logging
+    input  logic        log_clear,     // Clear log (pulse)
     
     // Upstream interface (from master)
     input  logic [15:0] in_addr,
@@ -86,16 +94,20 @@ module bus_sniffer #(
             pending_read <= 1'b0;
             pending_addr <= 16'h0;
             pending_time <= 16'h0;
+        end else if (log_clear) begin
+            log_wr_ptr <= '0;
+            trans_count <= 32'h0;
+            pending_read <= 1'b0;
         end else begin
-            // Track pending read
-            if (in_ren) begin
+            // Track pending read (only when logging enabled)
+            if (in_ren && log_enable) begin
                 pending_read <= 1'b1;
                 pending_addr <= in_addr;
                 pending_time <= cycle_cnt[15:0];
             end
             
-            // Log write immediately
-            if (in_wen) begin
+            // Log write immediately (only when logging enabled)
+            if (in_wen && log_enable) begin
                 log_mem[log_wr_ptr] <= {
                     in_wdata,               // [127:96] - write data (32-bit, upper zero)
                     32'h0,                  // [95:64]  - padding

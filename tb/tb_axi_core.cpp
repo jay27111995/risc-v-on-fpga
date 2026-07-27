@@ -175,8 +175,8 @@ int main(int argc, char** argv) {
     tb.axi_write(0x00, 0x01);  // RUN
     for (int i = 0; i < 10; i++) tb.tick();
     
-    printf("Running for 50 cycles...\n");
-    for (int i = 0; i < 50; i++) tb.tick();
+    printf("Running for 10 cycles...\n");
+    for (int i = 0; i < 10; i++) tb.tick();
     
     tb.axi_write(0x00, 0x00);  // STOP
     printf("\n");
@@ -242,7 +242,7 @@ int main(int argc, char** argv) {
     uint32_t cpu_cycle = (uint32_t)tb.axi_read(0x5004);
     printf("  Total accesses: %u, Current cycle: %u\n", cpu_count, cpu_cycle);
     
-    int cpu_entries = (cpu_count < 10) ? cpu_count : 10;  // Show up to 10
+    int cpu_entries = (cpu_count < 32) ? cpu_count : 32;  // Show up to 32
     const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
     for (int i = 0; i < cpu_entries; i++) {
         uint32_t base = 0x5010 + i * 0x10;

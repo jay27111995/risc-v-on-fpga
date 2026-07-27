@@ -397,9 +397,27 @@ module riscv_soc (
     // =========================================================================
     //
     // Accessible at addr 0x5xxx:
-    //   0x5000 = log_count, 0x5004 = log_cycle
+    //   0x5000 = log_count (RO), 0x5004 = log_cycle (RO)
+    //   0x5008 = control: [0]=enable, [1]=clear
     //   0x5010 = entry[0] bits[31:0],  0x5014 = entry[0] bits[63:32], 0x5018 = entry[0] bits[95:64]
     //   0x5020 = entry[1] bits[31:0],  etc.
+    
+    // CPU logger control register
+    logic cpulog_enable;
+    logic cpulog_clear;
+    
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (~rst_n) begin
+            cpulog_enable <= 1'b1;  // Enabled by default
+            cpulog_clear <= 1'b0;
+        end else begin
+            cpulog_clear <= 1'b0;  // Auto-clear
+            if (wen && addr[15:12] == 4'h5 && addr[7:0] == 8'h08) begin
+                cpulog_enable <= wdata[0];
+                cpulog_clear <= wdata[1];
+            end
+        end
+    end
     
     wire [4:0]  cpu_log_idx = addr[8:4] - 5'd1;  // Entry 0 at 0x5010, entry 1 at 0x5020
     wire [95:0] cpu_log_entry;
@@ -411,6 +429,10 @@ module riscv_soc (
     ) u_cpu_logger (
         .clk        (clk),
         .rst_n      (rst_n),
+        
+        // Control
+        .log_enable (cpulog_enable),
+        .log_clear  (cpulog_clear),
         
         // IMEM fetch
         .imem_addr  (if_pc),
@@ -439,6 +461,7 @@ module riscv_soc (
             case (addr[3:2])
                 2'd0: cpu_logger_rdata = cpu_log_count;
                 2'd1: cpu_logger_rdata = cpu_log_cycle;
+                2'd2: cpu_logger_rdata = {30'b0, 1'b0, cpulog_enable};  // control
                 default: cpu_logger_rdata = 32'h0;
             endcase
         end else begin

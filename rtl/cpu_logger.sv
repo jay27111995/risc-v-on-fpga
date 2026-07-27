@@ -6,6 +6,10 @@
 // - DMEM writes (store instructions)
 // - DMEM reads (load instructions)
 //
+// Control:
+//   log_enable - when high, logging is active; when low, logging paused
+//   log_clear  - pulse high to reset log pointer and count
+//
 // Log entry format (96 bits):
 //   [95:64] - data (instruction, load data, or store data)
 //   [63:32] - address
@@ -20,6 +24,10 @@ module cpu_logger #(
 ) (
     input  logic        clk,
     input  logic        rst_n,
+    
+    // Control
+    input  logic        log_enable,    // Enable logging
+    input  logic        log_clear,     // Clear log (pulse)
     
     // IMEM fetch interface (directly connects)
     input  logic [31:0] imem_addr,
@@ -78,7 +86,12 @@ module cpu_logger #(
             trans_count <= 32'h0;
             prev_imem_addr <= 32'hFFFFFFFF;
             prev_imem_valid <= 1'b0;
-        end else begin
+        end else if (log_clear) begin
+            log_wr_ptr <= '0;
+            trans_count <= 32'h0;
+            prev_imem_addr <= 32'hFFFFFFFF;
+            prev_imem_valid <= 1'b0;
+        end else if (log_enable) begin
             prev_imem_valid <= imem_valid;
             
             // Log IMEM fetch (only when address changes or first valid)

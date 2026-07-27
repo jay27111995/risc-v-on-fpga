@@ -256,12 +256,34 @@ module axi_core_hw(
   //
   // Sits between bus64to32 and riscv_soc to log all 32-bit transactions.
   // Sniffer log is accessible at addr 0x4xxx (directly from bus64to32 output).
+  //
+  // Control registers:
+  //   0x4000 = log_count (RO)
+  //   0x4004 = log_cycle (RO)
+  //   0x4008 = control: [0]=enable, [1]=clear (write 1 to clear, auto-clears)
 
   wire [15:0] sniff_out_addr;
   wire [31:0] sniff_out_wdata;
   wire        sniff_out_wen;
   wire        sniff_out_ren;
   wire [31:0] sniff_in_rdata;
+  
+  // Sniffer control register
+  logic sniffer_enable;
+  logic sniffer_clear;
+  
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      sniffer_enable <= 1'b1;  // Enabled by default
+      sniffer_clear <= 1'b0;
+    end else begin
+      sniffer_clear <= 1'b0;  // Auto-clear
+      if (soc_wen && is_sniffer_addr && soc_addr[7:0] == 8'h08) begin
+        sniffer_enable <= soc_wdata[0];
+        sniffer_clear <= soc_wdata[1];
+      end
+    end
+  end
   
   // Sniffer log read interface
   wire [3:0]   sniffer_log_idx = soc_addr[7:4] - 4'd1;  // Entry 0 at 0x4010, entry 1 at 0x4020
@@ -270,7 +292,7 @@ module axi_core_hw(
   wire [31:0]  sniffer_log_cycle;
   
   // Sniffer log read data mux (addr 0x4xxx)
-  // 0x4000 = log_count, 0x4004 = log_cycle
+  // 0x4000 = log_count, 0x4004 = log_cycle, 0x4008 = control
   // 0x4010 = entry[0] bits[31:0],   0x4014 = entry[0] bits[63:32],
   // 0x4018 = entry[0] bits[95:64],  0x401C = entry[0] bits[127:96]
   // 0x4020 = entry[1] bits[31:0],   etc.
@@ -281,6 +303,7 @@ module axi_core_hw(
       case (soc_addr[3:2])
         2'd0: sniffer_rdata = sniffer_log_count;
         2'd1: sniffer_rdata = sniffer_log_cycle;
+        2'd2: sniffer_rdata = {30'b0, 1'b0, sniffer_enable};  // control
         default: sniffer_rdata = 32'h0;
       endcase
     end else begin
@@ -302,6 +325,10 @@ module axi_core_hw(
   ) u_sniffer (
     .clk       (clk),
     .rst_n     (~rst),
+    
+    // Control
+    .log_enable (sniffer_enable),
+    .log_clear  (sniffer_clear),
     
     // Upstream (from bus64to32) - only non-sniffer addresses pass through
     .in_addr   (soc_addr),
