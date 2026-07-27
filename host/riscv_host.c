@@ -44,7 +44,12 @@ void write32(uint32_t offset, uint32_t value) {
 }
 
 uint32_t read32(uint32_t offset) {
-    return (uint32_t)read64(offset);
+    uint64_t qword = read64(offset & ~7);  // Align to 8 bytes
+    if (offset & 4) {
+        return (uint32_t)(qword >> 32);  // Upper 32 bits
+    } else {
+        return (uint32_t)qword;           // Lower 32 bits
+    }
 }
 
 // Control functions
