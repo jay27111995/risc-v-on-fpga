@@ -171,12 +171,22 @@ int main(int argc, char** argv) {
     tb.axi_write(0x00, 0x02);  // RESET
     for (int i = 0; i < 10; i++) tb.tick();
     
+    // Clear logs before starting CPU
+    printf("Clearing logs...\n");
+    tb.axi_write(0x4008, 0x03);  // Clear + enable sniffer
+    tb.axi_write(0x5008, 0x03);  // Clear + enable CPU logger
+    for (int i = 0; i < 5; i++) tb.tick();
+    
     printf("Starting CPU...\n");
     tb.axi_write(0x00, 0x01);  // RUN
     for (int i = 0; i < 10; i++) tb.tick();
     
     printf("Running for 10 cycles...\n");
     for (int i = 0; i < 10; i++) tb.tick();
+    
+    // Stop logging before reading results
+    tb.axi_write(0x4008, 0x00);  // Disable sniffer
+    tb.axi_write(0x5008, 0x00);  // Disable CPU logger
     
     tb.axi_write(0x00, 0x00);  // STOP
     printf("\n");
