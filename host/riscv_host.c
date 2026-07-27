@@ -209,6 +209,10 @@ int main(int argc, char *argv[]) {
     };
     size_t prog_len = sizeof(program) / sizeof(program[0]);
 
+    // Clear bus sniffer BEFORE loading so we capture IMEM writes
+    printf("Clearing bus sniffer...\n");
+    write32(BAR_SNIFFER + 0x08, 0x03);  // Clear + enable
+
     // Reset and load
     cpu_reset();
     printf("Loading %zu instructions...\n", prog_len);
@@ -243,13 +247,10 @@ int main(int argc, char *argv[]) {
     write_dmem64(0, 0);
     printf("\nDMEM[0] before: %ld\n", read_dmem64(0));
     
-    // Clear and enable loggers before running CPU
-    printf("Clearing loggers...\n");
-    printf("  Sniffer ctrl before: 0x%X\n", read32(BAR_SNIFFER + 0x08));
+    // Clear CPU logger before running (sniffer already cleared before IMEM load)
+    printf("Clearing CPU logger...\n");
     printf("  CPUlog ctrl before:  0x%X\n", read32(BAR_CPULOG + 0x08));
-    write32(BAR_SNIFFER + 0x08, 0x03);  // Clear + enable bus sniffer
     write32(BAR_CPULOG + 0x08, 0x03);   // Clear + enable CPU logger
-    printf("  Sniffer ctrl after:  0x%X\n", read32(BAR_SNIFFER + 0x08));
     printf("  CPUlog ctrl after:   0x%X\n", read32(BAR_CPULOG + 0x08));
     
     printf("Running CPU...\n");
