@@ -1,12 +1,12 @@
-// RISC-V SoC with PCIe BAR Interface
+// RISC-V SoC
 // ============================================================================
 //
 // A minimal RV32I CPU with classic 5-stage pipeline.
 //
 // Memory Map:
-//   0x0000-0x00FF  Control registers (64-bit aligned)
+//   0x0000-0x00FF  Control registers
 //   0x1000-0x1FFF  IMEM - 4KB instruction memory
-//   0x2000-0x3FFF  DMEM - 8KB data memory (64-bit wide for PCIe alignment)
+//   0x2000-0x3FFF  DMEM - 8KB data memory (64-bit wide)
 //
 // Control Registers:
 //   0x00  CTRL    [0] RUN, [1] RESET
@@ -19,12 +19,12 @@ module riscv_soc (
     input  logic        clk,
     input  logic        rst_n,
     
-    // BAR interface
-    input  logic [15:0] bar_addr,
-    input  logic [63:0] bar_wdata,
-    input  logic        bar_wen,
-    input  logic        bar_ren,
-    output logic [63:0] bar_rdata
+    // Host interface (directly from AXI wrapper)
+    input  logic [15:0] addr,
+    input  logic [63:0] wdata,
+    input  logic        wen,
+    input  logic        ren,
+    output logic [63:0] rdata
 );
 
     // =========================================================================
@@ -49,9 +49,9 @@ module riscv_soc (
             if (ctrl_reset)
                 ctrl_reset <= 1'b0;
             
-            if (bar_wen && bar_addr[15:12] == 4'h0 && bar_addr[7:2] == 6'd0) begin
-                ctrl_run   <= bar_wdata[0];
-                ctrl_reset <= bar_wdata[1];
+            if (wen && addr[15:12] == 4'h0 && addr[7:2] == 6'd0) begin
+                ctrl_run   <= wdata[0];
+                ctrl_reset <= wdata[1];
             end
         end
     end
@@ -64,13 +64,13 @@ module riscv_soc (
     logic [31:0] imem_host_rdata;
     
     always_ff @(posedge clk) begin
-        if (bar_wen && bar_addr[15:12] == 4'h1)
-            imem[bar_addr[11:2]] <= bar_wdata[31:0];
+        if (wen && addr[15:12] == 4'h1)
+            imem[addr[11:2]] <= wdata[31:0];
     end
     
     always_ff @(posedge clk) begin
-        if (bar_ren && bar_addr[15:12] == 4'h1)
-            imem_host_rdata <= imem[bar_addr[11:2]];
+        if (ren && addr[15:12] == 4'h1)
+            imem_host_rdata <= imem[addr[11:2]];
     end
     
     initial begin
@@ -85,7 +85,7 @@ module riscv_soc (
     // 64-bit wide to match PCIe 8-byte alignment requirement.
     // CPU accesses 32-bit words within 64-bit entries.
     
-    (* ramstyle = "no_rw_check, M20K" *) logic [63:0] dmem [0:1023];
+    logic [63:0] dmem [0:1023];
     
     // CPU port signals
     logic [31:0] cpu_dmem_addr;
@@ -96,16 +96,16 @@ module riscv_soc (
     // Address indexing
     wire [9:0]  cpu_dmem_idx  = cpu_dmem_addr[12:3];  // 64-bit entry
     wire        cpu_dmem_odd  = cpu_dmem_addr[2];     // Which half
-    wire [9:0]  host_dmem_idx = bar_addr[12:3];
+    wire [9:0]  host_dmem_idx = addr[12:3];
     
     // Write enables
-    wire host_dmem_wen = bar_wen && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3);
+    wire host_dmem_wen = wen && (addr[15:12] == 4'h2 || addr[15:12] == 4'h3);
     wire cpu_dmem_wen  = cpu_dmem_we && cpu_running && !host_dmem_wen;
     
     // Single write port (Quartus requirement)
     always_ff @(posedge clk) begin
         if (host_dmem_wen) begin
-            dmem[host_dmem_idx] <= bar_wdata;
+            dmem[host_dmem_idx] <= wdata;
         end else if (cpu_dmem_wen) begin
             if (cpu_dmem_odd)
                 dmem[cpu_dmem_idx][63:32] <= cpu_dmem_wdata;
@@ -120,7 +120,7 @@ module riscv_soc (
     // Host read (registered)
     logic [63:0] dmem_host_rdata;
     always_ff @(posedge clk) begin
-        if (bar_ren && (bar_addr[15:12] == 4'h2 || bar_addr[15:12] == 4'h3))
+        if (ren && (addr[15:12] == 4'h2 || addr[15:12] == 4'h3))
             dmem_host_rdata <= dmem[host_dmem_idx];
     end
     
@@ -134,19 +134,19 @@ module riscv_soc (
     // =========================================================================
 
     always_comb begin
-        bar_rdata = 64'h0;
-        case (bar_addr[15:12])
+        rdata = 64'h0;
+        case (addr[15:12])
             4'h0: begin
-                case (bar_addr[7:3])
-                    5'd0: bar_rdata = {62'b0, ctrl_reset, ctrl_run};  // CTRL
-                    5'd1: bar_rdata = {63'b0, cpu_running};           // STATUS
-                    5'd2: bar_rdata = {32'b0, cpu_pc};                // PC
-                    default: bar_rdata = 64'h0;
+                case (addr[7:3])
+                    5'd0: rdata = {62'b0, ctrl_reset, ctrl_run};  // CTRL
+                    5'd1: rdata = {63'b0, cpu_running};           // STATUS
+                    5'd2: rdata = {32'b0, cpu_pc};                // PC
+                    default: rdata = 64'h0;
                 endcase
             end
-            4'h1:        bar_rdata = {32'b0, imem_host_rdata};
-            4'h2, 4'h3:  bar_rdata = dmem_host_rdata;
-            default:     bar_rdata = 64'h0;
+            4'h1:        rdata = {32'b0, imem_host_rdata};
+            4'h2, 4'h3:  rdata = dmem_host_rdata;
+            default:     rdata = 64'h0;
         endcase
     end
 
