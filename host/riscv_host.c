@@ -245,8 +245,12 @@ int main(int argc, char *argv[]) {
     
     // Clear and enable loggers before running CPU
     printf("Clearing loggers...\n");
+    printf("  Sniffer ctrl before: 0x%X\n", read32(BAR_SNIFFER + 0x08));
+    printf("  CPUlog ctrl before:  0x%X\n", read32(BAR_CPULOG + 0x08));
     write32(BAR_SNIFFER + 0x08, 0x03);  // Clear + enable bus sniffer
     write32(BAR_CPULOG + 0x08, 0x03);   // Clear + enable CPU logger
+    printf("  Sniffer ctrl after:  0x%X\n", read32(BAR_SNIFFER + 0x08));
+    printf("  CPUlog ctrl after:   0x%X\n", read32(BAR_CPULOG + 0x08));
     
     printf("Running CPU...\n");
     cpu_run();
