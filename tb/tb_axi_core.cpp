@@ -187,8 +187,8 @@ int main(int argc, char** argv) {
     printf("Starting CPU...\n");
     tb.axi_write(0x00, 0x01);  // RUN
     
-    printf("Running for 8 cycles (enough for 5 instructions + store)...\n");
-    for (int i = 0; i < 8; i++) tb.tick();
+    printf("Running for 100 cycles...\n");
+    for (int i = 0; i < 100; i++) tb.tick();
     
     // Stop logging immediately
     tb.axi_write(0x5008, 0x00);  // Disable CPU logger
@@ -210,6 +210,35 @@ int main(int argc, char** argv) {
     if (dmem0 != 8) {
         printf("  ERROR: DMEM[0] incorrect!\n");
         errors++;
+    }
+    
+    // =========================================================================
+    // Read Performance Counters
+    // =========================================================================
+    printf("\n=== Performance Counters ===\n");
+    uint32_t cycles   = (uint32_t)tb.axi_read(0x20);
+    uint32_t instrs   = (uint32_t)tb.axi_read(0x24);
+    uint32_t stalls   = (uint32_t)tb.axi_read(0x28);
+    uint32_t branches = (uint32_t)tb.axi_read(0x2C);
+    uint32_t br_taken = (uint32_t)tb.axi_read(0x30);
+    uint32_t loads    = (uint32_t)tb.axi_read(0x34);
+    uint32_t stores   = (uint32_t)tb.axi_read(0x38);
+    
+    printf("  Cycles:         %u\n", cycles);
+    printf("  Instructions:   %u\n", instrs);
+    printf("  Stalls:         %u\n", stalls);
+    printf("  Branches:       %u\n", branches);
+    printf("  Branches taken: %u\n", br_taken);
+    printf("  Loads:          %u\n", loads);
+    printf("  Stores:         %u\n", stores);
+    
+    if (instrs > 0) {
+        float cpi = (float)cycles / instrs;
+        float ipc = (float)instrs / cycles;
+        printf("\n  CPI: %.2f (cycles per instruction)\n", cpi);
+        printf("  IPC: %.2f (instructions per cycle)\n", ipc);
+        if (cycles > 0)
+            printf("  Stall rate: %.1f%%\n", 100.0f * stalls / cycles);
     }
     
     printf("\n");

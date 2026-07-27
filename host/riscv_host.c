@@ -284,6 +284,35 @@ int main(int argc, char *argv[]) {
     }
     
     // =========================================================================
+    // Read Performance Counters
+    // =========================================================================
+    printf("\n=== Performance Counters ===\n");
+    uint32_t cycles   = read32(0x20);
+    uint32_t instrs   = read32(0x24);
+    uint32_t stalls   = read32(0x28);
+    uint32_t branches = read32(0x2C);
+    uint32_t br_taken = read32(0x30);
+    uint32_t loads    = read32(0x34);
+    uint32_t stores   = read32(0x38);
+    
+    printf("  Cycles:         %u\n", cycles);
+    printf("  Instructions:   %u\n", instrs);
+    printf("  Stalls:         %u\n", stalls);
+    printf("  Branches:       %u\n", branches);
+    printf("  Branches taken: %u\n", br_taken);
+    printf("  Loads:          %u\n", loads);
+    printf("  Stores:         %u\n", stores);
+    
+    if (instrs > 0) {
+        float cpi = (float)cycles / instrs;
+        float ipc = (float)instrs / cycles;
+        printf("\n  CPI: %.2f (cycles per instruction)\n", cpi);
+        printf("  IPC: %.2f (instructions per cycle)\n", ipc);
+        if (cycles > 0)
+            printf("  Stall rate: %.1f%%\n", 100.0f * stalls / cycles);
+    }
+    
+    // =========================================================================
     // Read Bus Sniffer Logs
     // =========================================================================
     printf("\n=== Bus Sniffer Log (host transactions) ===\n");
