@@ -41,10 +41,10 @@ public:
         // Initialize all inputs
         soc->rst_n = 0;
         soc->clk = 0;
-        soc->bar_wen = 0;
-        soc->bar_ren = 0;
-        soc->bar_addr = 0;
-        soc->bar_wdata = 0;
+        soc->wen = 0;
+        soc->ren = 0;
+        soc->addr = 0;
+        soc->wdata = 0;
         
         // Reset sequence
         tick();
@@ -66,23 +66,23 @@ public:
     
     // BAR write (single cycle)
     void bar_write(uint16_t addr, uint64_t data) {
-        soc->bar_addr = addr;
-        soc->bar_wdata = data;
-        soc->bar_wen = 1;
-        soc->bar_ren = 0;
+        soc->addr = addr;
+        soc->wdata = data;
+        soc->wen = 1;
+        soc->ren = 0;
         tick();
-        soc->bar_wen = 0;
+        soc->wen = 0;
     }
     
     // BAR read (requires 2 cycles for registered read)
     uint64_t bar_read(uint16_t addr) {
-        soc->bar_addr = addr;
-        soc->bar_wen = 0;
-        soc->bar_ren = 1;   // Assert read enable
+        soc->addr = addr;
+        soc->wen = 0;
+        soc->ren = 1;   // Assert read enable
         tick();             // Address latched, data captured
-        soc->bar_ren = 0;
+        soc->ren = 0;
         tick();             // Data available
-        return soc->bar_rdata;
+        return soc->rdata;
     }
     
     // ---- IMEM Access ----

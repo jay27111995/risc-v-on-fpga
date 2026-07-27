@@ -33,10 +33,10 @@ public:
         
         soc->rst_n = 0;
         soc->clk = 0;
-        soc->bar_wen = 0;
-        soc->bar_ren = 0;
-        soc->bar_addr = 0;
-        soc->bar_wdata = 0;
+        soc->wen = 0;
+        soc->ren = 0;
+        soc->addr = 0;
+        soc->wdata = 0;
         
         tick();
         tick();
@@ -57,21 +57,21 @@ public:
     }
     
     void bar_write(uint32_t addr, uint32_t data) {
-        soc->bar_wen = 1;
-        soc->bar_addr = addr;
-        soc->bar_wdata = data;
+        soc->wen = 1;
+        soc->addr = addr;
+        soc->wdata = data;
         tick();
-        soc->bar_wen = 0;
+        soc->wen = 0;
         tick();
     }
     
     uint32_t bar_read(uint32_t addr) {
-        soc->bar_ren = 1;
-        soc->bar_addr = addr;
+        soc->ren = 1;
+        soc->addr = addr;
         tick();
-        soc->bar_ren = 0;
+        soc->ren = 0;
         tick();
-        return static_cast<uint32_t>(soc->bar_rdata);
+        return static_cast<uint32_t>(soc->rdata);
     }
     
     void write_imem(uint32_t idx, uint32_t instr) {
