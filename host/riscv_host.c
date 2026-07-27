@@ -271,16 +271,18 @@ int main(int argc, char *argv[]) {
     int sniff_entries = (sniff_count < 8) ? sniff_count : 8;
     for (int i = 0; i < sniff_entries; i++) {
         uint32_t base = BAR_SNIFFER + 0x10 + i * 0x10;
-        uint32_t w0 = read32(base + 0x00);
-        uint32_t w1 = read32(base + 0x04);
-        uint32_t w2 = read32(base + 0x08);
+        uint32_t w0 = read32(base + 0x00);  // [31:0]: reserved[31:1], type[0]
+        uint32_t w1 = read32(base + 0x04);  // [63:32]: addr[15:0] << 16 | timestamp[15:0]
+        uint32_t w2 = read32(base + 0x08);  // [95:64]: data[31:0]
+        uint32_t w3 = read32(base + 0x0C);  // [127:96]: data[63:32] (unused for 32-bit)
         
+        // Parse: [127:64]=data, [63:48]=addr, [47:32]=timestamp, [0]=type
         uint32_t type = w0 & 1;
         uint32_t timestamp = w1 & 0xFFFF;
-        uint32_t addr = w1 >> 16;
+        uint32_t addr = (w1 >> 16) & 0xFFFF;
         uint32_t data = w2;
         
-        printf("  [%d] cycle=%4u %s addr=0x%04X data=0x%08X\n",
+        printf("  [%d] cycle=%5u %s addr=0x%04X data=0x%08X\n",
                i, timestamp, type ? "WR" : "RD", addr, data);
     }
     
@@ -296,16 +298,17 @@ int main(int argc, char *argv[]) {
     int cpu_entries = (cpu_count < 10) ? cpu_count : 10;
     for (int i = 0; i < cpu_entries; i++) {
         uint32_t base = BAR_CPULOG + 0x10 + i * 0x10;
-        uint32_t w0 = read32(base + 0x00);
-        uint32_t w1 = read32(base + 0x04);
-        uint32_t w2 = read32(base + 0x08);
+        uint32_t w0 = read32(base + 0x00);  // [31:0]: timestamp[31:16], reserved[15:2], type[1:0]
+        uint32_t w1 = read32(base + 0x04);  // [63:32]: address
+        uint32_t w2 = read32(base + 0x08);  // [95:64]: data
         
+        // Parse: [95:64]=data, [63:32]=addr, [31:16]=timestamp, [1:0]=type
         uint32_t type = w0 & 3;
         uint32_t timestamp = (w0 >> 16) & 0xFFFF;
         uint32_t addr = w1;
         uint32_t data = w2;
         
-        printf("  [%2d] cycle=%4u %s addr=0x%08X data=0x%08X\n",
+        printf("  [%2d] cycle=%5u %s addr=0x%08X data=0x%08X\n",
                i, timestamp, type_names[type], addr, data);
     }
 

@@ -264,7 +264,7 @@ module axi_core_hw(
   wire [31:0] sniff_in_rdata;
   
   // Sniffer log read interface
-  wire [3:0]   sniffer_log_idx = soc_addr[5:2];  // Log entry index from addr bits
+  wire [3:0]   sniffer_log_idx = soc_addr[7:4] - 4'd1;  // Entry 0 at 0x4010, entry 1 at 0x4020
   wire [127:0] sniffer_log_entry;
   wire [31:0]  sniffer_log_count;
   wire [31:0]  sniffer_log_cycle;

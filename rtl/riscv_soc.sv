@@ -401,7 +401,7 @@ module riscv_soc (
     //   0x5010 = entry[0] bits[31:0],  0x5014 = entry[0] bits[63:32], 0x5018 = entry[0] bits[95:64]
     //   0x5020 = entry[1] bits[31:0],  etc.
     
-    wire [4:0]  cpu_log_idx = addr[6:2] - 5'd4;  // Entry 0 at 0x5010, entry 1 at 0x5020
+    wire [4:0]  cpu_log_idx = addr[8:4] - 5'd1;  // Entry 0 at 0x5010, entry 1 at 0x5020
     wire [95:0] cpu_log_entry;
     wire [31:0] cpu_log_count;
     wire [31:0] cpu_log_cycle;
