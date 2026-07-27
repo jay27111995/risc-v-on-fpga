@@ -18,7 +18,7 @@
 // ============================================================================
 
 module bus_sniffer #(
-    parameter LOG_DEPTH = 16   // Number of transactions to log (power of 2)
+    parameter LOG_DEPTH = 32   // Number of transactions to log (power of 2)
 ) (
     input  logic        clk,
     input  logic        rst_n,
