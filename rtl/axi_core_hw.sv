@@ -251,17 +251,97 @@ module axi_core_hw(
   assign axi_lite_s_rdata = adapter_rdata;
 
   // =========================================================================
+  // Bus Sniffer (monitors host transactions to SoC)
+  // =========================================================================
+  //
+  // Sits between bus64to32 and riscv_soc to log all 32-bit transactions.
+  // Sniffer log is accessible at addr 0x4xxx (directly from bus64to32 output).
+
+  wire [15:0] sniff_out_addr;
+  wire [31:0] sniff_out_wdata;
+  wire        sniff_out_wen;
+  wire        sniff_out_ren;
+  wire [31:0] sniff_in_rdata;
+  
+  // Sniffer log read interface
+  wire [3:0]   sniffer_log_idx = soc_addr[5:2];  // Log entry index from addr bits
+  wire [127:0] sniffer_log_entry;
+  wire [31:0]  sniffer_log_count;
+  wire [31:0]  sniffer_log_cycle;
+  
+  // Sniffer log read data mux (addr 0x4xxx)
+  // 0x4000 = log_count, 0x4004 = log_cycle
+  // 0x4010 = entry[0] bits[31:0],   0x4014 = entry[0] bits[63:32],
+  // 0x4018 = entry[0] bits[95:64],  0x401C = entry[0] bits[127:96]
+  // 0x4020 = entry[1] bits[31:0],   etc.
+  logic [31:0] sniffer_rdata;
+  always_comb begin
+    if (soc_addr[7:4] == 4'h0) begin
+      // Control registers
+      case (soc_addr[3:2])
+        2'd0: sniffer_rdata = sniffer_log_count;
+        2'd1: sniffer_rdata = sniffer_log_cycle;
+        default: sniffer_rdata = 32'h0;
+      endcase
+    end else begin
+      // Log entries (addr[7:4] - 1 = log index, addr[3:2] = word within entry)
+      case (soc_addr[3:2])
+        2'd0: sniffer_rdata = sniffer_log_entry[31:0];
+        2'd1: sniffer_rdata = sniffer_log_entry[63:32];
+        2'd2: sniffer_rdata = sniffer_log_entry[95:64];
+        2'd3: sniffer_rdata = sniffer_log_entry[127:96];
+      endcase
+    end
+  end
+  
+  // Route sniffer addresses (0x4xxx) directly, others go through sniffer to SoC
+  wire is_sniffer_addr = (soc_addr[15:12] == 4'h4);
+  
+  bus_sniffer #(
+    .LOG_DEPTH(16)
+  ) u_sniffer (
+    .clk       (clk),
+    .rst_n     (~rst),
+    
+    // Upstream (from bus64to32) - only non-sniffer addresses pass through
+    .in_addr   (soc_addr),
+    .in_wdata  (soc_wdata),
+    .in_wen    (soc_wen && !is_sniffer_addr),
+    .in_ren    (soc_ren && !is_sniffer_addr),
+    .out_rdata (sniff_in_rdata),
+    
+    // Downstream (to SoC)
+    .out_addr  (sniff_out_addr),
+    .out_wdata (sniff_out_wdata),
+    .out_wen   (sniff_out_wen),
+    .out_ren   (sniff_out_ren),
+    .in_rdata  (soc_rdata_raw),
+    
+    // Log read interface
+    .log_idx   (soc_addr[7:4] - 4'd1),  // Entry 0 at 0x4010, entry 1 at 0x4020, etc.
+    .log_entry (sniffer_log_entry),
+    .log_count (sniffer_log_count),
+    .log_cycle (sniffer_log_cycle)
+  );
+  
+  // SoC read data before sniffer mux
+  wire [31:0] soc_rdata_raw;
+  
+  // Final read data mux: sniffer regs or SoC data (via sniffer passthrough)
+  assign soc_rdata = is_sniffer_addr ? sniffer_rdata : sniff_in_rdata;
+
+  // =========================================================================
   // RISC-V SoC Instance
   // =========================================================================
 
   riscv_soc u_soc (
     .clk    (clk),
     .rst_n  (~rst),
-    .addr   (soc_addr),
-    .wdata  (soc_wdata),
-    .wen    (soc_wen),
-    .ren    (soc_ren),
-    .rdata  (soc_rdata)
+    .addr   (sniff_out_addr),
+    .wdata  (sniff_out_wdata),
+    .wen    (sniff_out_wen),
+    .ren    (sniff_out_ren),
+    .rdata  (soc_rdata_raw)
   );
 
 endmodule

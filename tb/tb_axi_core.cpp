@@ -198,6 +198,69 @@ int main(int argc, char** argv) {
     }
     
     printf("\n");
+    
+    // =========================================================================
+    // Read Bus Sniffer Logs (0x4xxx)
+    // =========================================================================
+    printf("=== Bus Sniffer Log (host transactions) ===\n");
+    uint32_t sniff_count = (uint32_t)tb.axi_read(0x4000);
+    uint32_t sniff_cycle = (uint32_t)tb.axi_read(0x4004);
+    printf("  Total transactions: %u, Current cycle: %u\n", sniff_count, sniff_cycle);
+    
+    int sniff_entries = (sniff_count < 8) ? sniff_count : 8;  // Show up to 8
+    for (int i = 0; i < sniff_entries; i++) {
+        uint32_t base = 0x4010 + i * 0x10;
+        uint32_t w0 = (uint32_t)tb.axi_read(base + 0x00);  // entry[31:0]
+        uint32_t w1 = (uint32_t)tb.axi_read(base + 0x04);  // entry[63:32]
+        uint32_t w2 = (uint32_t)tb.axi_read(base + 0x08);  // entry[95:64]
+        uint32_t w3 = (uint32_t)tb.axi_read(base + 0x0C);  // entry[127:96]
+        
+        // Parse entry: [127:64]=data, [63:48]=addr, [47:32]=timestamp, [0]=type
+        uint32_t type = w0 & 1;
+        uint32_t timestamp = w1 & 0xFFFF;
+        uint32_t addr = (w1 >> 16) | ((w2 & 0xFFFF) << 16);
+        uint64_t data = ((uint64_t)w3 << 32) | (w2 >> 16) | ((uint64_t)(w2 & 0xFFFF0000));
+        // Actually entry format is: [127:64]=data, [63:48]=addr, [47:32]=timestamp, [0]=type
+        // So: w0=[31:0], w1=[63:32], w2=[95:64], w3=[127:96]
+        // type = w0[0], timestamp = w1[15:0], addr = w1[31:16], data = {w3, w2}
+        type = w0 & 1;
+        timestamp = w1 & 0xFFFF;
+        addr = w1 >> 16;
+        data = ((uint64_t)w3 << 32) | w2;
+        
+        printf("  [%d] cycle=%4u %s addr=0x%04X data=0x%08X\n",
+               i, timestamp, type ? "WR" : "RD", addr, (uint32_t)data);
+    }
+    
+    printf("\n");
+    
+    // =========================================================================
+    // Read CPU Logger Logs (0x5xxx)
+    // =========================================================================
+    printf("=== CPU Logger (CPU memory accesses) ===\n");
+    uint32_t cpu_count = (uint32_t)tb.axi_read(0x5000);
+    uint32_t cpu_cycle = (uint32_t)tb.axi_read(0x5004);
+    printf("  Total accesses: %u, Current cycle: %u\n", cpu_count, cpu_cycle);
+    
+    int cpu_entries = (cpu_count < 10) ? cpu_count : 10;  // Show up to 10
+    const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
+    for (int i = 0; i < cpu_entries; i++) {
+        uint32_t base = 0x5010 + i * 0x10;
+        uint32_t w0 = (uint32_t)tb.axi_read(base + 0x00);  // entry[31:0]
+        uint32_t w1 = (uint32_t)tb.axi_read(base + 0x04);  // entry[63:32]
+        uint32_t w2 = (uint32_t)tb.axi_read(base + 0x08);  // entry[95:64]
+        
+        // Parse entry: [95:64]=data, [63:32]=addr, [31:16]=timestamp, [1:0]=type
+        uint32_t type = w0 & 3;
+        uint32_t timestamp = (w0 >> 16) & 0xFFFF;
+        uint32_t addr = w1;
+        uint32_t data = w2;
+        
+        printf("  [%2d] cycle=%4u %s addr=0x%08X data=0x%08X\n",
+               i, timestamp, type_names[type], addr, data);
+    }
+    
+    printf("\n");
     if (errors == 0) {
         printf("=== ALL TESTS PASSED ===\n");
     } else {
