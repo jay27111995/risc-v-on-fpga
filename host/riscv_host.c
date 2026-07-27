@@ -238,9 +238,18 @@ int main(int argc, char *argv[]) {
     write_dmem64(0, 0);
     printf("\nDMEM[0] before: %ld\n", read_dmem64(0));
     
+    // Clear and enable loggers before running CPU
+    printf("Clearing loggers...\n");
+    write32(BAR_SNIFFER + 0x08, 0x03);  // Clear + enable bus sniffer
+    write32(BAR_CPULOG + 0x08, 0x03);   // Clear + enable CPU logger
+    
     printf("Running CPU...\n");
     cpu_run();
     usleep(100000);  // 100ms
+    
+    // Stop loggers
+    write32(BAR_SNIFFER + 0x08, 0x00);  // Disable bus sniffer
+    write32(BAR_CPULOG + 0x08, 0x00);   // Disable CPU logger
     
     uint32_t status = read32(BAR_STATUS);
     uint32_t pc = cpu_get_pc();
@@ -271,16 +280,15 @@ int main(int argc, char *argv[]) {
     int sniff_entries = (sniff_count < 8) ? sniff_count : 8;
     for (int i = 0; i < sniff_entries; i++) {
         uint32_t base = BAR_SNIFFER + 0x10 + i * 0x10;
-        uint32_t w0 = read32(base + 0x00);  // [31:0]: reserved[31:1], type[0]
-        uint32_t w1 = read32(base + 0x04);  // [63:32]: addr[15:0] << 16 | timestamp[15:0]
-        uint32_t w2 = read32(base + 0x08);  // [95:64]: data[31:0]
-        uint32_t w3 = read32(base + 0x0C);  // [127:96]: data[63:32] (unused for 32-bit)
+        uint32_t w0 = read32(base + 0x00);  // [31:0]: type at bit 0
+        uint32_t w1 = read32(base + 0x04);  // [63:32]: addr[15:0]<<16 | timestamp[15:0]
+        uint32_t w2 = read32(base + 0x08);  // [95:64]: padding (0)
+        uint32_t w3 = read32(base + 0x0C);  // [127:96]: data
         
-        // Parse: [127:64]=data, [63:48]=addr, [47:32]=timestamp, [0]=type
         uint32_t type = w0 & 1;
         uint32_t timestamp = w1 & 0xFFFF;
         uint32_t addr = (w1 >> 16) & 0xFFFF;
-        uint32_t data = w2;
+        uint32_t data = w3;  // Data is in the high word
         
         printf("  [%d] cycle=%5u %s addr=0x%04X data=0x%08X\n",
                i, timestamp, type ? "WR" : "RD", addr, data);
