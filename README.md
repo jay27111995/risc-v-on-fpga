@@ -62,6 +62,18 @@ Fetch    Decode    Execute   Memory    Write
 | 0x08   | STATUS | [0] RUNNING |
 | 0x10   | PC     | Current program counter |
 
+### Performance Counters (0x0xxx)
+
+| Offset | Name      | Description |
+|--------|-----------|-------------|
+| 0x20   | CYCLES    | Total cycles (write to clear all) |
+| 0x24   | INSTRS    | Instructions retired |
+| 0x28   | STALLS    | Stall cycles (load-use hazards) |
+| 0x2C   | BRANCHES  | Branch instructions |
+| 0x30   | BR_TAKEN  | Branches actually taken |
+| 0x34   | LOADS     | Load instructions |
+| 0x38   | STORES    | Store instructions |
+
 ### Bus Sniffer (0x4xxx) - Host transaction logger
 
 | Offset | Name      | Description |

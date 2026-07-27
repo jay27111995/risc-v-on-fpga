@@ -65,6 +65,74 @@ module riscv_soc (
     end
 
     // =========================================================================
+    // Performance Counters
+    // =========================================================================
+    //
+    // Readable at:
+    //   0x20 = CYCLES      - Total cycles since last reset
+    //   0x24 = INSTRS      - Instructions retired (completed)
+    //   0x28 = STALLS      - Stall cycles (load-use hazards)
+    //   0x2C = BRANCHES    - Branch instructions executed
+    //   0x30 = BR_TAKEN    - Branches actually taken
+    //   0x34 = LOADS       - Load instructions
+    //   0x38 = STORES      - Store instructions
+    //
+    // Write any value to 0x20 to clear all counters.
+    
+    logic [31:0] perf_cycles;
+    logic [31:0] perf_instrs;
+    logic [31:0] perf_stalls;
+    logic [31:0] perf_branches;
+    logic [31:0] perf_br_taken;
+    logic [31:0] perf_loads;
+    logic [31:0] perf_stores;
+    
+    // Forward declarations for counter inputs
+    logic wb_valid;
+    logic mem_branch, mem_branch_taken, mem_mem_read, mem_mem_write, mem_valid;
+    
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (~rst_n) begin
+            perf_cycles    <= 32'h0;
+            perf_instrs    <= 32'h0;
+            perf_stalls    <= 32'h0;
+            perf_branches  <= 32'h0;
+            perf_br_taken  <= 32'h0;
+            perf_loads     <= 32'h0;
+            perf_stores    <= 32'h0;
+        end else if (cpu_rst || (wen && addr[15:12] == 4'h0 && addr[7:2] == 6'd8)) begin
+            // Clear on CPU reset or write to 0x20
+            perf_cycles    <= 32'h0;
+            perf_instrs    <= 32'h0;
+            perf_stalls    <= 32'h0;
+            perf_branches  <= 32'h0;
+            perf_br_taken  <= 32'h0;
+            perf_loads     <= 32'h0;
+            perf_stores    <= 32'h0;
+        end else if (cpu_running) begin
+            perf_cycles <= perf_cycles + 1;
+            
+            if (wb_valid)
+                perf_instrs <= perf_instrs + 1;
+            
+            if (stall)
+                perf_stalls <= perf_stalls + 1;
+            
+            if (mem_branch && mem_valid)
+                perf_branches <= perf_branches + 1;
+            
+            if (mem_branch_taken)
+                perf_br_taken <= perf_br_taken + 1;
+            
+            if (mem_mem_read && mem_valid)
+                perf_loads <= perf_loads + 1;
+            
+            if (mem_mem_write && mem_valid)
+                perf_stores <= perf_stores + 1;
+        end
+    end
+
+    // =========================================================================
     // IMEM - Instruction Memory (4KB, 32-bit)
     // =========================================================================
     
@@ -139,9 +207,16 @@ module riscv_soc (
         case (addr[15:12])
             4'h0: begin
                 case (addr[7:2])
-                    6'd0: rdata = {30'b0, ctrl_reset, ctrl_run};  // CTRL
-                    6'd2: rdata = {31'b0, cpu_running};           // STATUS
-                    6'd4: rdata = cpu_pc;                         // PC
+                    6'd0:  rdata = {30'b0, ctrl_reset, ctrl_run};  // 0x00 CTRL
+                    6'd2:  rdata = {31'b0, cpu_running};           // 0x08 STATUS
+                    6'd4:  rdata = cpu_pc;                         // 0x10 PC
+                    6'd8:  rdata = perf_cycles;                    // 0x20 CYCLES
+                    6'd9:  rdata = perf_instrs;                    // 0x24 INSTRS
+                    6'd10: rdata = perf_stalls;                    // 0x28 STALLS
+                    6'd11: rdata = perf_branches;                  // 0x2C BRANCHES
+                    6'd12: rdata = perf_br_taken;                  // 0x30 BR_TAKEN
+                    6'd13: rdata = perf_loads;                     // 0x34 LOADS
+                    6'd14: rdata = perf_stores;                    // 0x38 STORES
                     default: rdata = 32'h0;
                 endcase
             end
@@ -159,13 +234,11 @@ module riscv_soc (
     logic stall;
     logic flush;
     
-    // Forward declarations
+    // Forward declarations for hazard detection and performance counters
     logic        ex_mem_read, ex_valid;
     logic [4:0]  ex_rd, id_rs1, id_rs2;
     logic        id_valid;
-    logic        mem_branch_taken;
     logic [31:0] mem_branch_target;
-    logic        mem_mem_read, mem_valid;
     logic [4:0]  mem_rd, ex_rs1, ex_rs2;
 
     // Load-use hazard (combinational for single-cycle stall)
@@ -321,8 +394,7 @@ module riscv_soc (
     // =========================================================================
     
     logic [31:0] mem_store_data;
-    logic        mem_mem_write;
-    logic        mem_branch;
+    // mem_mem_write, mem_branch declared in forward declarations
     logic        mem_alu_zero;
     logic [31:0] mem_pc;
     logic [31:0] mem_imm;
@@ -369,7 +441,7 @@ module riscv_soc (
     logic [31:0] wb_alu_result;
     logic [31:0] wb_load_data;
     logic        wb_mem_read;
-    logic        wb_valid;
+    // wb_valid declared in forward declarations
     
     always_ff @(posedge clk) begin
         if (cpu_rst) begin
