@@ -257,6 +257,10 @@ int main(int argc, char *argv[]) {
     write32(BAR_CPULOG + 0x08, 0x03);   // Clear + enable CPU logger
     printf("  CPUlog ctrl after:   0x%X\n", read32(BAR_CPULOG + 0x08));
     
+    // Clear performance counters
+    printf("Clearing perf counters...\n");
+    write32(0x20, 0x00);  // Write to CYCLES clears all counters
+    
     printf("Running CPU...\n");
     cpu_run();
     usleep(100000);  // 100ms
