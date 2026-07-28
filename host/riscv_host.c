@@ -247,30 +247,26 @@ int main(int argc, char *argv[]) {
     }
     printf("  Host DMEM access OK\n");
 
-    // Stop CPU first (might be running from previous test)
+    // Stop and reset CPU (clears perf counters too)
     write32(BAR_CTRL, 0x00);  // STOP
     usleep(1000);
+    write32(BAR_CTRL, 0x02);  // RESET (clears perf counters)
+    usleep(1000);
     
-    // Clear DMEM[0] and run CPU
+    // Clear DMEM[0]
     write_dmem64(0, 0);
     printf("\nDMEM[0] before: %ld\n", read_dmem64(0));
     
     // Clear CPU logger before running (sniffer already cleared before IMEM load)
     printf("Clearing CPU logger...\n");
-    printf("  CPUlog ctrl before:  0x%X\n", read32(BAR_CPULOG + 0x08));
     write32(BAR_CPULOG + 0x08, 0x03);   // Clear + enable CPU logger
-    printf("  CPUlog ctrl after:   0x%X\n", read32(BAR_CPULOG + 0x08));
-    
-    // Clear performance counters and wait for it to take effect
-    printf("Clearing perf counters...\n");
-    write32(0x20, 0x00);  // Write to CYCLES clears all counters
-    usleep(1000);  // 1ms delay to ensure clear completes
     
     printf("Running CPU...\n");
     cpu_run();
     usleep(100000);  // 100ms
     
-    // Stop loggers
+    // Stop CPU and loggers
+    write32(BAR_CTRL, 0x00);  // STOP CPU
     write32(BAR_SNIFFER + 0x08, 0x00);  // Disable bus sniffer
     write32(BAR_CPULOG + 0x08, 0x00);   // Disable CPU logger
     
