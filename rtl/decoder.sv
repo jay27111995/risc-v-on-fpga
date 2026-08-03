@@ -40,7 +40,8 @@ module decoder (
     output logic        alu_src,     // ALU source: 0=rs2, 1=immediate
     output logic        mem_read,    // load from memory?
     output logic        mem_write,   // store to memory?
-    output logic        branch       // branch instruction?
+    output logic        branch,      // branch instruction?
+    output logic [2:0]  branch_op    // branch type (funct3): 000=BEQ, 001=BNE, etc.
 );
 
 // Extract fixed fields (same position for all formats)
@@ -74,6 +75,7 @@ always_comb begin
     mem_read = 0;
     mem_write = 0;
     branch = 0;
+    branch_op = 3'b000;
     
     case (opcode)
         OP_RTYPE: begin  // R-type: ADD, SUB, AND, OR, XOR
@@ -121,8 +123,9 @@ always_comb begin
             imm = {{20{instr[31]}}, instr[31:25], instr[11:7]};
         end
         
-        OP_BRANCH: begin  // BEQ: if (rs1 == rs2) PC += imm
+        OP_BRANCH: begin  // BEQ, BNE: if (condition) PC += imm
             branch = 1;
+            branch_op = funct3;  // 000=BEQ, 001=BNE, 100=BLT, 101=BGE, 110=BLTU, 111=BGEU
             alu_op = 3'b001; // SUB: compare rs1 - rs2, check zero flag
             // B-type immediate: imm[12|10:5|4:1|11], shifted left by 1 (2-byte aligned)
             imm = {{20{instr[31]}}, instr[7], instr[30:25], instr[11:8], 1'b0};

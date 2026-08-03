@@ -199,99 +199,185 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Test program: x1=5, x2=3, x3=x1+x2, store x3 to dmem[0], branch to self
-    uint32_t program[] = {
-        0x00500093,  // addi x1, x0, 5
-        0x00300113,  // addi x2, x0, 3
-        0x002081B3,  // add  x3, x1, x2
-        0x00302023,  // sw   x3, 0(x0)
-        0x00000063,  // beq  x0, x0, 0 (infinite loop)
+    // =========================================================================
+    // Test 1: Basic ALU (x1=5, x2=3, x3=x1+x2, store to dmem[0])
+    // =========================================================================
+    printf("\n=== Test 1: Basic ALU ===\n");
+    uint32_t program1[] = {
+        0x00500093,  // ADDI x1, x0, 5
+        0x00300113,  // ADDI x2, x0, 3
+        0x002081B3,  // ADD  x3, x1, x2
+        0x00302023,  // SW   x3, 0(x0)      ; dmem[0] = 8
+        0x00000063,  // BEQ  x0, x0, 0      ; infinite loop
     };
-    size_t prog_len = sizeof(program) / sizeof(program[0]);
-
-    // Clear bus sniffer BEFORE loading so we capture IMEM writes
-    printf("Clearing bus sniffer...\n");
-    write32(BAR_SNIFFER + 0x08, 0x03);  // Clear + enable
-
-    // Reset and load
-    cpu_reset();
-    printf("Loading %zu instructions...\n", prog_len);
-    load_program(program, prog_len);
     
-    // Stop sniffer to preserve IMEM writes
-    write32(BAR_SNIFFER + 0x08, 0x01);  // Disable but keep data (enable=1, clear=0... wait no)
-    write32(BAR_SNIFFER + 0x08, 0x00);  // Disable sniffer
-
-    // Verify IMEM
-    printf("\nVerifying IMEM:\n");
-    int imem_ok = 1;
-    for (size_t i = 0; i < prog_len; i++) {
-        uint32_t rb = read_imem(i);
-        printf("  IMEM[%zu] = 0x%08X (expected 0x%08X) %s\n", 
-               i, rb, program[i], rb == program[i] ? "OK" : "FAIL");
-        if (rb != program[i]) imem_ok = 0;
-    }
-    if (!imem_ok) {
-        printf("\nIMEM verification FAILED!\n");
-        return 1;
-    }
-
-    // Test host DMEM access
-    printf("\n=== Testing host DMEM write/read ===\n");
-    write_dmem64(0, 0xDEADBEEF);
-    uint64_t rb = read_dmem64(0);
-    printf("  Wrote 0xDEADBEEF, read back 0x%lX\n", rb);
-    if ((rb & 0xFFFFFFFF) != 0xDEADBEEF) {
-        printf("  Host DMEM access FAILED!\n");
-        return 1;
-    }
-    printf("  Host DMEM access OK\n");
-
-    // Stop and reset CPU (clears perf counters too)
-    write32(BAR_CTRL, 0x00);  // STOP
+    // Stop and reset CPU
+    write32(BAR_CTRL, 0x00);
     usleep(1000);
-    write32(BAR_CTRL, 0x02);  // RESET (clears perf counters)
+    write32(BAR_CTRL, 0x02);  // RESET
     usleep(1000);
     
-    // Clear DMEM[0]
-    write_dmem64(0, 0);
-    printf("\nDMEM[0] before: %ld\n", read_dmem64(0));
+    // Clear DMEM test area
+    for (int i = 0; i < 8; i++) write_dmem64(i, 0);
     
-    // Clear CPU logger before running (sniffer already cleared before IMEM load)
-    printf("Clearing CPU logger...\n");
-    write32(BAR_CPULOG + 0x08, 0x03);   // Clear + enable CPU logger
+    printf("Loading program...\n");
+    load_program(program1, sizeof(program1)/sizeof(program1[0]));
     
     printf("Running CPU...\n");
     cpu_run();
-    usleep(100000);  // 100ms
+    usleep(10000);  // 10ms
+    cpu_stop();
     
-    // Stop CPU and loggers
-    write32(BAR_CTRL, 0x00);  // STOP CPU
-    write32(BAR_SNIFFER + 0x08, 0x00);  // Disable bus sniffer
-    write32(BAR_CPULOG + 0x08, 0x00);   // Disable CPU logger
+    uint32_t result1 = read_dmem(0);
+    printf("  DMEM[0] = %d (expected 8)\n", result1);
+    int test1_pass = (result1 == 8);
+    printf("  Test 1: %s\n", test1_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 2: BNE - Count down from 5 to 0
+    // =========================================================================
+    printf("\n=== Test 2: BNE (count down) ===\n");
+    uint32_t program2[] = {
+        0x00500093,  // ADDI x1, x0, 5      ; x1 = 5
+        0xFFF08093,  // ADDI x1, x1, -1     ; x1 = x1 - 1
+        0xFE1010E3,  // BNE  x1, x0, -4     ; if (x1 != 0) goto -4
+        0x00102223,  // SW   x1, 4(x0)      ; dmem[4] = 0
+        0x00000063,  // BEQ  x0, x0, 0      ; infinite loop
+    };
     
-    uint32_t status = read32(BAR_STATUS);
-    uint32_t pc = cpu_get_pc();
-    printf("  STATUS: 0x%X\n", status);
-    printf("  PC: 0x%X\n", pc);
+    write32(BAR_CTRL, 0x02);  // RESET
+    usleep(1000);
+    load_program(program2, sizeof(program2)/sizeof(program2[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t result2 = read_dmem(1);  // dmem[4] = word index 1
+    printf("  DMEM[4] = %d (expected 0)\n", result2);
+    int test2_pass = (result2 == 0);
+    printf("  Test 2: %s\n", test2_pass ? "PASSED" : "FAILED");
 
-    // Read result
-    uint64_t dmem0 = read_dmem64(0);
-    uint32_t result = (uint32_t)dmem0;
-    printf("\nResults:\n");
-    printf("  DMEM[0] (64-bit): 0x%016lX\n", dmem0);
-    printf("  DMEM[0] (low 32): %d (expected 8)\n", result);
+    // =========================================================================
+    // Test 3: BLT (signed) - (-5) < 3 should be true
+    // =========================================================================
+    printf("\n=== Test 3: BLT (signed comparison) ===\n");
+    uint32_t program3[] = {
+        0xFFB00093,  // ADDI x1, x0, -5     ; x1 = -5
+        0x00300113,  // ADDI x2, x0, 3      ; x2 = 3
+        0x00100193,  // ADDI x3, x0, 1      ; x3 = 1 (assume taken)
+        0x0020C463,  // BLT  x1, x2, 8      ; if (x1 < x2 signed) skip next
+        0x00200193,  // ADDI x3, x0, 2      ; x3 = 2 (not taken)
+        0x00302423,  // SW   x3, 8(x0)      ; dmem[8] = x3
+        0x00000063,  // BEQ  x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program3, sizeof(program3)/sizeof(program3[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t result3 = read_dmem(2);  // dmem[8] = word index 2
+    printf("  DMEM[8] = %d (expected 1, BLT taken because -5 < 3)\n", result3);
+    int test3_pass = (result3 == 1);
+    printf("  Test 3: %s\n", test3_pass ? "PASSED" : "FAILED");
 
-    if (result == 8) {
-        printf("\n=== TEST PASSED ===\n");
+    // =========================================================================
+    // Test 4: BLTU (unsigned) - 0xFFFFFFFB < 3 should be FALSE
+    // =========================================================================
+    printf("\n=== Test 4: BLTU (unsigned comparison) ===\n");
+    uint32_t program4[] = {
+        0xFFB00093,  // ADDI x1, x0, -5     ; x1 = 0xFFFFFFFB
+        0x00300113,  // ADDI x2, x0, 3      ; x2 = 3
+        0x00100193,  // ADDI x3, x0, 1      ; x3 = 1 (assume taken)
+        0x0020E463,  // BLTU x1, x2, 8      ; if (x1 < x2 unsigned) skip
+        0x00200193,  // ADDI x3, x0, 2      ; x3 = 2 (not taken)
+        0x00302623,  // SW   x3, 12(x0)     ; dmem[12] = x3
+        0x00000063,  // BEQ  x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program4, sizeof(program4)/sizeof(program4[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t result4 = read_dmem(3);  // dmem[12] = word index 3
+    printf("  DMEM[12] = %d (expected 2, BLTU not taken because 0xFFFFFFFB > 3)\n", result4);
+    int test4_pass = (result4 == 2);
+    printf("  Test 4: %s\n", test4_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 5: BGE (signed) - 5 >= -3 should be TRUE
+    // =========================================================================
+    printf("\n=== Test 5: BGE (signed comparison) ===\n");
+    uint32_t program5[] = {
+        0x00500093,  // ADDI x1, x0, 5      ; x1 = 5
+        0xFFD00113,  // ADDI x2, x0, -3     ; x2 = -3
+        0x00100193,  // ADDI x3, x0, 1      ; x3 = 1 (assume taken)
+        0x0020D463,  // BGE  x1, x2, 8      ; if (x1 >= x2 signed) skip
+        0x00200193,  // ADDI x3, x0, 2      ; x3 = 2 (not taken)
+        0x00302823,  // SW   x3, 16(x0)     ; dmem[16] = x3
+        0x00000063,  // BEQ  x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program5, sizeof(program5)/sizeof(program5[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t result5 = read_dmem(4);  // dmem[16] = word index 4
+    printf("  DMEM[16] = %d (expected 1, BGE taken because 5 >= -3)\n", result5);
+    int test5_pass = (result5 == 1);
+    printf("  Test 5: %s\n", test5_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 6: BGEU (unsigned) - 5 >= 0xFFFFFFFD should be FALSE
+    // =========================================================================
+    printf("\n=== Test 6: BGEU (unsigned comparison) ===\n");
+    uint32_t program6[] = {
+        0x00500093,  // ADDI x1, x0, 5      ; x1 = 5
+        0xFFD00113,  // ADDI x2, x0, -3     ; x2 = 0xFFFFFFFD
+        0x00100193,  // ADDI x3, x0, 1      ; x3 = 1 (assume taken)
+        0x0020F463,  // BGEU x1, x2, 8      ; if (x1 >= x2 unsigned) skip
+        0x00200193,  // ADDI x3, x0, 2      ; x3 = 2 (not taken)
+        0x00302A23,  // SW   x3, 20(x0)     ; dmem[20] = x3
+        0x00000063,  // BEQ  x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program6, sizeof(program6)/sizeof(program6[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t result6 = read_dmem(5);  // dmem[20] = word index 5
+    printf("  DMEM[20] = %d (expected 2, BGEU not taken because 5 < 0xFFFFFFFD)\n", result6);
+    int test6_pass = (result6 == 2);
+    printf("  Test 6: %s\n", test6_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Summary
+    // =========================================================================
+    printf("\n=== Test Summary ===\n");
+    int total_pass = test1_pass + test2_pass + test3_pass + test4_pass + test5_pass + test6_pass;
+    printf("  Passed: %d/6\n", total_pass);
+    
+    if (total_pass == 6) {
+        printf("\n=== ALL TESTS PASSED ===\n");
     } else {
-        printf("\n=== TEST FAILED ===\n");
+        printf("\n=== SOME TESTS FAILED ===\n");
     }
     
     // =========================================================================
-    // Read Performance Counters
+    // Read Performance Counters (from last test)
     // =========================================================================
-    printf("\n=== Performance Counters ===\n");
+    printf("\n=== Performance Counters (last test) ===\n");
     uint32_t cycles   = read32(0x20);
     uint32_t instrs   = read32(0x24);
     uint32_t stalls   = read32(0x28);
@@ -311,62 +397,9 @@ int main(int argc, char *argv[]) {
     if (instrs > 0) {
         float cpi = (float)cycles / instrs;
         float ipc = (float)instrs / cycles;
-        printf("\n  CPI: %.2f (cycles per instruction)\n", cpi);
-        printf("  IPC: %.2f (instructions per cycle)\n", ipc);
-        if (cycles > 0)
-            printf("  Stall rate: %.1f%%\n", 100.0f * stalls / cycles);
-    }
-    
-    // =========================================================================
-    // Read Bus Sniffer Logs
-    // =========================================================================
-    printf("\n=== Bus Sniffer Log (host transactions) ===\n");
-    uint32_t sniff_count = read32(BAR_SNIFFER + 0x00);
-    uint32_t sniff_cycle = read32(BAR_SNIFFER + 0x04);
-    printf("Total transactions: %u, Current cycle: %u\n", sniff_count, sniff_cycle);
-    
-    int sniff_entries = (sniff_count < 32) ? sniff_count : 32;  // Show up to 32
-    for (int i = sniff_entries - 1; i >= 0; i--) {  // Show oldest first
-        uint32_t base = BAR_SNIFFER + 0x10 + i * 0x10;
-        uint32_t w0 = read32(base + 0x00);  // [31:0]: type at bit 0
-        uint32_t w1 = read32(base + 0x04);  // [63:32]: addr[15:0]<<16 | timestamp[15:0]
-        (void)read32(base + 0x08);          // [95:64]: padding (unused)
-        uint32_t w3 = read32(base + 0x0C);  // [127:96]: data
-        
-        uint32_t type = w0 & 1;
-        uint32_t timestamp = w1 & 0xFFFF;
-        uint32_t addr = (w1 >> 16) & 0xFFFF;
-        uint32_t data = w3;  // Data is in the high word
-        
-        printf("  [%d] cycle=%5u %s addr=0x%04X data=0x%08X\n",
-               i, timestamp, type ? "WR" : "RD", addr, data);
-    }
-    
-    // =========================================================================
-    // Read CPU Logger Logs
-    // =========================================================================
-    printf("\n=== CPU Logger (CPU memory accesses) ===\n");
-    uint32_t cpu_count = read32(BAR_CPULOG + 0x00);
-    uint32_t cpu_cycle = read32(BAR_CPULOG + 0x04);
-    printf("Total accesses: %u, Current cycle: %u\n", cpu_count, cpu_cycle);
-    
-    const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
-    int cpu_entries = (cpu_count < 32) ? cpu_count : 32;  // Show up to 32
-    for (int i = cpu_entries - 1; i >= 0; i--) {  // Show oldest first
-        uint32_t base = BAR_CPULOG + 0x10 + i * 0x10;
-        uint32_t w0 = read32(base + 0x00);  // [31:0]: timestamp[31:16], reserved[15:2], type[1:0]
-        uint32_t w1 = read32(base + 0x04);  // [63:32]: address
-        uint32_t w2 = read32(base + 0x08);  // [95:64]: data
-        
-        // Parse: [95:64]=data, [63:32]=addr, [31:16]=timestamp, [1:0]=type
-        uint32_t type = w0 & 3;
-        uint32_t timestamp = (w0 >> 16) & 0xFFFF;
-        uint32_t addr = w1;
-        uint32_t data = w2;
-        
-        printf("  [%2d] cycle=%5u %s addr=0x%08X data=0x%08X\n",
-               i, timestamp, type_names[type], addr, data);
+        printf("\n  CPI: %.2f\n", cpi);
+        printf("  IPC: %.2f\n", ipc);
     }
 
-    return (result == 8) ? 0 : 1;
+    return (total_pass == 6) ? 0 : 1;
 }

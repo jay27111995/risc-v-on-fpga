@@ -298,6 +298,247 @@ int main(int argc, char** argv) {
     }
     
     printf("\n");
+    
+    // =========================================================================
+    // Test 2: BNE instruction
+    // =========================================================================
+    printf("=== Test 2: BNE Instruction ===\n");
+    
+    // Stop CPU and reset
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // Program: count down from 5 to 0 using BNE
+    // x1 = 5
+    // loop: x1 = x1 - 1
+    //       if (x1 != 0) goto loop
+    //       store x1 to dmem[4]
+    //       infinite loop
+    const uint32_t bne_program[] = {
+        0x00500093,  // ADDI x1, x0, 5      ; x1 = 5
+        0xFFF08093,  // ADDI x1, x1, -1     ; x1 = x1 - 1
+        0xFE1010E3,  // BNE  x1, x0, -4     ; if (x1 != 0) goto -4 (back to ADDI)
+        0x00102223,  // SW   x1, 4(x0)      ; store x1 to dmem[4] (should be 0)
+        0x00000063,  // BEQ  x0, x0, 0      ; infinite loop
+    };
+    const int bne_program_size = sizeof(bne_program) / sizeof(bne_program[0]);
+    
+    // Load Program to IMEM
+    printf("Loading BNE test program...\n");
+    for (int i = 0; i < bne_program_size; i += 2) {
+        uint32_t even = bne_program[i];
+        uint32_t odd = (i + 1 < bne_program_size) ? bne_program[i + 1] : 0x00000013;
+        uint64_t pair = ((uint64_t)odd << 32) | even;
+        tb.axi_write(0x1000 + i * 4, pair);
+    }
+    
+    // Start CPU
+    tb.axi_write(0x0000, 0x01);  // RUN
+    for (int i = 0; i < 200; i++) tb.tick();  // Run for 200 cycles
+    tb.axi_write(0x0000, 0x00);  // STOP
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // Check result - dmem[4] should be 0 (counted down from 5)
+    uint32_t bne_result = (uint32_t)tb.axi_read(0x2004);
+    printf("  DMEM[4] = %u (expected 0)\n", bne_result);
+    if (bne_result != 0) {
+        printf("  ERROR: BNE test failed!\n");
+        errors++;
+    } else {
+        printf("  BNE test PASSED!\n");
+    }
+    
+    // =========================================================================
+    // Test 3: BLT instruction (branch if less than, signed)
+    // =========================================================================
+    printf("\n=== Test 3: BLT Instruction (signed) ===\n");
+    
+    // Stop CPU and reset
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // Program: Test signed comparison
+    // x1 = -5 (0xFFFFFFFB), x2 = 3
+    // if (x1 < x2) store 1 to dmem[8], else store 0
+    // -5 < 3 is true (signed), so should store 1
+    const uint32_t blt_program[] = {
+        0xFFB00093,  // ADDI x1, x0, -5     ; x1 = -5
+        0x00300113,  // ADDI x2, x0, 3      ; x2 = 3
+        0x0020C463,  // BLT  x1, x2, 8      ; if (x1 < x2) skip next
+        0x00000193,  // ADDI x3, x0, 0      ; x3 = 0 (not taken path)
+        0x0000006F,  // JAL  x0, 0          ; jump to end (we don't have JAL yet, use BEQ)
+        // Actually let's restructure to not need JAL
+    };
+    // Simpler version:
+    // if x1 < x2 (signed), x3 = 1, else x3 = 2
+    // store x3 to dmem[8]
+    const uint32_t blt_program2[] = {
+        0xFFB00093,  // ADDI x1, x0, -5     ; x1 = -5
+        0x00300113,  // ADDI x2, x0, 3      ; x2 = 3
+        0x00100193,  // ADDI x3, x0, 1      ; x3 = 1 (assume taken)
+        0x0020C463,  // BLT  x1, x2, 8      ; if (x1 < x2) skip next instr
+        0x00200193,  // ADDI x3, x0, 2      ; x3 = 2 (not taken)
+        0x00302423,  // SW   x3, 8(x0)      ; store x3 to dmem[8]
+        0x00000063,  // BEQ  x0, x0, 0      ; infinite loop
+    };
+    const int blt_program_size = sizeof(blt_program2) / sizeof(blt_program2[0]);
+    
+    printf("Loading BLT test program...\n");
+    for (int i = 0; i < blt_program_size; i += 2) {
+        uint32_t even = blt_program2[i];
+        uint32_t odd = (i + 1 < blt_program_size) ? blt_program2[i + 1] : 0x00000013;
+        uint64_t pair = ((uint64_t)odd << 32) | even;
+        tb.axi_write(0x1000 + i * 4, pair);
+    }
+    
+    tb.axi_write(0x0000, 0x01);  // RUN
+    for (int i = 0; i < 100; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);  // STOP
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // -5 < 3 is true (signed), so branch taken, x3 stays 1
+    uint32_t blt_result = (uint32_t)tb.axi_read(0x2008);
+    printf("  DMEM[8] = %u (expected 1, BLT taken)\n", blt_result);
+    if (blt_result != 1) {
+        printf("  ERROR: BLT test failed!\n");
+        errors++;
+    } else {
+        printf("  BLT test PASSED!\n");
+    }
+    
+    // =========================================================================
+    // Test 4: BLTU instruction (branch if less than, unsigned)
+    // =========================================================================
+    printf("\n=== Test 4: BLTU Instruction (unsigned) ===\n");
+    
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // Same values: x1 = -5 (0xFFFFFFFB), x2 = 3
+    // Unsigned: 0xFFFFFFFB > 3, so BLTU should NOT be taken
+    const uint32_t bltu_program[] = {
+        0xFFB00093,  // ADDI x1, x0, -5     ; x1 = -5 (0xFFFFFFFB)
+        0x00300113,  // ADDI x2, x0, 3      ; x2 = 3
+        0x00100193,  // ADDI x3, x0, 1      ; x3 = 1 (assume taken)
+        0x0020E463,  // BLTU x1, x2, 8      ; if (x1 < x2 unsigned) skip next
+        0x00200193,  // ADDI x3, x0, 2      ; x3 = 2 (not taken)
+        0x00302623,  // SW   x3, 12(x0)     ; store x3 to dmem[12]
+        0x00000063,  // BEQ  x0, x0, 0      ; infinite loop
+    };
+    const int bltu_program_size = sizeof(bltu_program) / sizeof(bltu_program[0]);
+    
+    printf("Loading BLTU test program...\n");
+    for (int i = 0; i < bltu_program_size; i += 2) {
+        uint32_t even = bltu_program[i];
+        uint32_t odd = (i + 1 < bltu_program_size) ? bltu_program[i + 1] : 0x00000013;
+        uint64_t pair = ((uint64_t)odd << 32) | even;
+        tb.axi_write(0x1000 + i * 4, pair);
+    }
+    
+    tb.axi_write(0x0000, 0x01);  // RUN
+    for (int i = 0; i < 100; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);  // STOP
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // 0xFFFFFFFB < 3 is false (unsigned), so branch NOT taken, x3 = 2
+    uint32_t bltu_result = (uint32_t)tb.axi_read(0x200C);
+    printf("  DMEM[12] = %u (expected 2, BLTU not taken)\n", bltu_result);
+    if (bltu_result != 2) {
+        printf("  ERROR: BLTU test failed!\n");
+        errors++;
+    } else {
+        printf("  BLTU test PASSED!\n");
+    }
+    
+    // =========================================================================
+    // Test 5: BGE instruction (branch if greater or equal, signed)
+    // =========================================================================
+    printf("\n=== Test 5: BGE Instruction (signed) ===\n");
+    
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // x1 = 5, x2 = -3
+    // 5 >= -3 is true (signed), so BGE should be taken
+    const uint32_t bge_program[] = {
+        0x00500093,  // ADDI x1, x0, 5      ; x1 = 5
+        0xFFD00113,  // ADDI x2, x0, -3     ; x2 = -3
+        0x00100193,  // ADDI x3, x0, 1      ; x3 = 1 (assume taken)
+        0x0020D463,  // BGE  x1, x2, 8      ; if (x1 >= x2 signed) skip next
+        0x00200193,  // ADDI x3, x0, 2      ; x3 = 2 (not taken)
+        0x00302823,  // SW   x3, 16(x0)     ; store x3 to dmem[16]
+        0x00000063,  // BEQ  x0, x0, 0      ; infinite loop
+    };
+    const int bge_program_size = sizeof(bge_program) / sizeof(bge_program[0]);
+    
+    printf("Loading BGE test program...\n");
+    for (int i = 0; i < bge_program_size; i += 2) {
+        uint32_t even = bge_program[i];
+        uint32_t odd = (i + 1 < bge_program_size) ? bge_program[i + 1] : 0x00000013;
+        uint64_t pair = ((uint64_t)odd << 32) | even;
+        tb.axi_write(0x1000 + i * 4, pair);
+    }
+    
+    tb.axi_write(0x0000, 0x01);  // RUN
+    for (int i = 0; i < 100; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);  // STOP
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // 5 >= -3 is true (signed), so branch taken, x3 = 1
+    uint32_t bge_result = (uint32_t)tb.axi_read(0x2010);
+    printf("  DMEM[16] = %u (expected 1, BGE taken)\n", bge_result);
+    if (bge_result != 1) {
+        printf("  ERROR: BGE test failed!\n");
+        errors++;
+    } else {
+        printf("  BGE test PASSED!\n");
+    }
+    
+    // =========================================================================
+    // Test 6: BGEU instruction (branch if greater or equal, unsigned)
+    // =========================================================================
+    printf("\n=== Test 6: BGEU Instruction (unsigned) ===\n");
+    
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // x1 = 5, x2 = -3 (0xFFFFFFFD)
+    // 5 >= 0xFFFFFFFD is false (unsigned), so BGEU should NOT be taken
+    const uint32_t bgeu_program[] = {
+        0x00500093,  // ADDI x1, x0, 5      ; x1 = 5
+        0xFFD00113,  // ADDI x2, x0, -3     ; x2 = -3 (0xFFFFFFFD)
+        0x00100193,  // ADDI x3, x0, 1      ; x3 = 1 (assume taken)
+        0x0020F463,  // BGEU x1, x2, 8      ; if (x1 >= x2 unsigned) skip next
+        0x00200193,  // ADDI x3, x0, 2      ; x3 = 2 (not taken)
+        0x00302A23,  // SW   x3, 20(x0)     ; store x3 to dmem[20]
+        0x00000063,  // BEQ  x0, x0, 0      ; infinite loop
+    };
+    const int bgeu_program_size = sizeof(bgeu_program) / sizeof(bgeu_program[0]);
+    
+    printf("Loading BGEU test program...\n");
+    for (int i = 0; i < bgeu_program_size; i += 2) {
+        uint32_t even = bgeu_program[i];
+        uint32_t odd = (i + 1 < bgeu_program_size) ? bgeu_program[i + 1] : 0x00000013;
+        uint64_t pair = ((uint64_t)odd << 32) | even;
+        tb.axi_write(0x1000 + i * 4, pair);
+    }
+    
+    tb.axi_write(0x0000, 0x01);  // RUN
+    for (int i = 0; i < 100; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);  // STOP
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // 5 >= 0xFFFFFFFD is false (unsigned), so branch NOT taken, x3 = 2
+    uint32_t bgeu_result = (uint32_t)tb.axi_read(0x2014);
+    printf("  DMEM[20] = %u (expected 2, BGEU not taken)\n", bgeu_result);
+    if (bgeu_result != 2) {
+        printf("  ERROR: BGEU test failed!\n");
+        errors++;
+    } else {
+        printf("  BGEU test PASSED!\n");
+    }
+    
+    printf("\n");
     if (errors == 0) {
         printf("=== ALL TESTS PASSED ===\n");
     } else {
