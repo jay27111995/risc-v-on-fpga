@@ -165,6 +165,7 @@ module riscv_soc (
     logic [31:0] cpu_dmem_wdata;
     logic [31:0] cpu_dmem_rdata;
     logic        cpu_dmem_we;
+    logic [3:0]  cpu_dmem_be;  // Byte enables for byte/half stores
     
     // Address indexing (word-aligned, 32-bit entries)
     wire [10:0] cpu_dmem_idx  = cpu_dmem_addr[12:2];
@@ -174,12 +175,16 @@ module riscv_soc (
     wire host_dmem_wen = wen && (addr[15:12] == 4'h2 || addr[15:12] == 4'h3);
     wire cpu_dmem_wen  = cpu_dmem_we && cpu_running && !host_dmem_wen;
     
-    // Single write port (Quartus requirement)
+    // Single write port with byte enables (Quartus requirement)
     always_ff @(posedge clk) begin
         if (host_dmem_wen) begin
             dmem[host_dmem_idx] <= wdata;
         end else if (cpu_dmem_wen) begin
-            dmem[cpu_dmem_idx] <= cpu_dmem_wdata;
+            // Byte-wise write based on byte enables
+            if (cpu_dmem_be[0]) dmem[cpu_dmem_idx][7:0]   <= cpu_dmem_wdata[7:0];
+            if (cpu_dmem_be[1]) dmem[cpu_dmem_idx][15:8]  <= cpu_dmem_wdata[15:8];
+            if (cpu_dmem_be[2]) dmem[cpu_dmem_idx][23:16] <= cpu_dmem_wdata[23:16];
+            if (cpu_dmem_be[3]) dmem[cpu_dmem_idx][31:24] <= cpu_dmem_wdata[31:24];
         end
     end
     
@@ -291,9 +296,12 @@ module riscv_soc (
     
     logic [4:0]  id_rd;
     logic [31:0] id_imm;
-    logic [2:0]  id_alu_op;
+    logic [3:0]  id_alu_op;
     logic        id_reg_write, id_alu_src, id_mem_read, id_mem_write, id_branch;
     logic [2:0]  id_branch_op;
+    logic        id_jump, id_jump_reg;
+    logic        id_lui, id_auipc;
+    logic [2:0]  id_mem_op;
     
     decoder decoder_inst (
         .instr     (id_instr),
@@ -306,8 +314,13 @@ module riscv_soc (
         .alu_src   (id_alu_src),
         .mem_read  (id_mem_read),
         .mem_write (id_mem_write),
+        .mem_op    (id_mem_op),
         .branch    (id_branch),
-        .branch_op (id_branch_op)
+        .branch_op (id_branch_op),
+        .jump      (id_jump),
+        .jump_reg  (id_jump_reg),
+        .lui       (id_lui),
+        .auipc     (id_auipc)
     );
     
     logic [31:0] id_rs1_data, id_rs2_data;
@@ -333,9 +346,12 @@ module riscv_soc (
     logic [31:0] ex_pc;
     logic [31:0] ex_rs1_data, ex_rs2_data;
     logic [31:0] ex_imm;
-    logic [2:0]  ex_alu_op;
+    logic [3:0]  ex_alu_op;
     logic        ex_reg_write, ex_alu_src, ex_mem_write, ex_branch;
     logic [2:0]  ex_branch_op;
+    logic        ex_jump, ex_jump_reg;
+    logic        ex_lui, ex_auipc;
+    logic [2:0]  ex_mem_op;
     
     always_ff @(posedge clk) begin
         if (cpu_rst || flush || stall) begin
@@ -344,6 +360,9 @@ module riscv_soc (
             ex_mem_read  <= 1'b0;
             ex_mem_write <= 1'b0;
             ex_branch    <= 1'b0;
+            ex_jump      <= 1'b0;
+            ex_lui       <= 1'b0;
+            ex_auipc     <= 1'b0;
         end else if (cpu_running) begin
             ex_pc        <= id_pc;
             ex_rs1_data  <= id_rs1_data;
@@ -357,8 +376,13 @@ module riscv_soc (
             ex_alu_src   <= id_alu_src;
             ex_mem_read  <= id_mem_read  && id_valid;
             ex_mem_write <= id_mem_write && id_valid;
+            ex_mem_op    <= id_mem_op;
             ex_branch    <= id_branch    && id_valid;
             ex_branch_op <= id_branch_op;
+            ex_jump      <= id_jump      && id_valid;
+            ex_jump_reg  <= id_jump_reg;
+            ex_lui       <= id_lui       && id_valid;
+            ex_auipc     <= id_auipc     && id_valid;
             ex_valid     <= id_valid;
         end
     end
@@ -369,7 +393,6 @@ module riscv_soc (
     
     logic [31:0] mem_alu_result;
     logic        mem_reg_write;
-    
     // Forwarding
     wire fwd_mem_rs1 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs1);
     wire fwd_mem_rs2 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs2);
@@ -396,6 +419,12 @@ module riscv_soc (
         .lt     (ex_alu_lt),
         .ltu    (ex_alu_ltu)
     );
+    
+    // LUI/AUIPC result: imm for LUI, PC+imm for AUIPC
+    wire [31:0] ex_lui_auipc_result = ex_auipc ? (ex_pc + ex_imm) : ex_imm;
+    
+    // Select between ALU result and LUI/AUIPC result
+    wire [31:0] ex_result = (ex_lui || ex_auipc) ? ex_lui_auipc_result : ex_alu_result;
 
     // =========================================================================
     // EX/MEM Pipeline Register
@@ -409,6 +438,8 @@ module riscv_soc (
     logic [31:0] mem_pc;
     logic [31:0] mem_imm;
     logic [2:0]  mem_branch_op;
+    logic        mem_jump, mem_jump_reg;
+    logic [2:0]  mem_mem_op;
     
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -417,15 +448,19 @@ module riscv_soc (
             mem_mem_read  <= 1'b0;
             mem_mem_write <= 1'b0;
             mem_branch    <= 1'b0;
+            mem_jump      <= 1'b0;
         end else if (cpu_running) begin
-            mem_alu_result <= ex_alu_result;
+            mem_alu_result <= ex_result;  // Use ex_result (includes LUI/AUIPC)
             mem_store_data <= ex_fwd_rs2;
             mem_rd         <= ex_rd;
             mem_reg_write  <= ex_reg_write;
             mem_mem_read   <= ex_mem_read;
             mem_mem_write  <= ex_mem_write;
+            mem_mem_op     <= ex_mem_op;
             mem_branch     <= ex_branch && ex_valid;
             mem_branch_op  <= ex_branch_op;
+            mem_jump       <= ex_jump && ex_valid;
+            mem_jump_reg   <= ex_jump_reg;
             mem_alu_zero   <= ex_alu_zero;
             mem_alu_lt     <= ex_alu_lt;
             mem_alu_ltu    <= ex_alu_ltu;
@@ -459,14 +494,103 @@ module riscv_soc (
         endcase
     end
     
-    assign mem_branch_taken  = mem_branch && branch_condition && mem_valid;
-    assign mem_branch_target = mem_pc + mem_imm;
+    // Jump target: JAL uses PC+imm, JALR uses rs1+imm (from ALU result)
+    wire [31:0] mem_jump_target = mem_jump_reg ? mem_alu_result : (mem_pc + mem_imm);
+    
+    // Branch or jump taken
+    assign mem_branch_taken  = ((mem_branch && branch_condition) || mem_jump) && mem_valid;
+    assign mem_branch_target = mem_jump ? mem_jump_target : (mem_pc + mem_imm);
+    
+    // PC+4 for JAL/JALR to write to rd
+    wire [31:0] mem_pc_plus4 = mem_pc + 32'd4;
+    
+    // Address low bits for byte/half selection
+    wire [1:0] mem_addr_lo = mem_alu_result[1:0];
+    
+    // -------------------------------------------------------------------------
+    // Store data and byte enables based on mem_op
+    // mem_op: 000=SB, 001=SH, 010=SW
+    // -------------------------------------------------------------------------
+    logic [31:0] store_data_shifted;
+    logic [3:0]  store_byte_enable;
+    
+    always_comb begin
+        store_data_shifted = mem_store_data;
+        store_byte_enable = 4'b1111;  // Default: all bytes (SW)
+        
+        case (mem_mem_op[1:0])
+            2'b00: begin  // SB - store byte
+                case (mem_addr_lo)
+                    2'b00: begin store_data_shifted = {24'b0, mem_store_data[7:0]};       store_byte_enable = 4'b0001; end
+                    2'b01: begin store_data_shifted = {16'b0, mem_store_data[7:0], 8'b0}; store_byte_enable = 4'b0010; end
+                    2'b10: begin store_data_shifted = {8'b0, mem_store_data[7:0], 16'b0}; store_byte_enable = 4'b0100; end
+                    2'b11: begin store_data_shifted = {mem_store_data[7:0], 24'b0};       store_byte_enable = 4'b1000; end
+                endcase
+            end
+            2'b01: begin  // SH - store halfword
+                case (mem_addr_lo[1])
+                    1'b0: begin store_data_shifted = {16'b0, mem_store_data[15:0]};       store_byte_enable = 4'b0011; end
+                    1'b1: begin store_data_shifted = {mem_store_data[15:0], 16'b0};       store_byte_enable = 4'b1100; end
+                endcase
+            end
+            default: begin  // SW - store word
+                store_data_shifted = mem_store_data;
+                store_byte_enable = 4'b1111;
+            end
+        endcase
+    end
     
     assign cpu_dmem_addr  = mem_alu_result;
-    assign cpu_dmem_wdata = mem_store_data;
+    assign cpu_dmem_wdata = store_data_shifted;
     assign cpu_dmem_we    = mem_mem_write && mem_valid;
+    assign cpu_dmem_be    = store_byte_enable;
     
-    wire [31:0] mem_load_data = cpu_dmem_rdata;
+    // -------------------------------------------------------------------------
+    // Load data selection and sign extension
+    // mem_op: 000=LB, 001=LH, 010=LW, 100=LBU, 101=LHU
+    // -------------------------------------------------------------------------
+    logic [31:0] load_data_selected;
+    
+    always_comb begin
+        load_data_selected = cpu_dmem_rdata;  // Default: full word (LW)
+        
+        case (mem_mem_op)
+            3'b000: begin  // LB - load byte signed
+                case (mem_addr_lo)
+                    2'b00: load_data_selected = {{24{cpu_dmem_rdata[7]}},  cpu_dmem_rdata[7:0]};
+                    2'b01: load_data_selected = {{24{cpu_dmem_rdata[15]}}, cpu_dmem_rdata[15:8]};
+                    2'b10: load_data_selected = {{24{cpu_dmem_rdata[23]}}, cpu_dmem_rdata[23:16]};
+                    2'b11: load_data_selected = {{24{cpu_dmem_rdata[31]}}, cpu_dmem_rdata[31:24]};
+                endcase
+            end
+            3'b001: begin  // LH - load halfword signed
+                case (mem_addr_lo[1])
+                    1'b0: load_data_selected = {{16{cpu_dmem_rdata[15]}}, cpu_dmem_rdata[15:0]};
+                    1'b1: load_data_selected = {{16{cpu_dmem_rdata[31]}}, cpu_dmem_rdata[31:16]};
+                endcase
+            end
+            3'b010: begin  // LW - load word
+                load_data_selected = cpu_dmem_rdata;
+            end
+            3'b100: begin  // LBU - load byte unsigned
+                case (mem_addr_lo)
+                    2'b00: load_data_selected = {24'b0, cpu_dmem_rdata[7:0]};
+                    2'b01: load_data_selected = {24'b0, cpu_dmem_rdata[15:8]};
+                    2'b10: load_data_selected = {24'b0, cpu_dmem_rdata[23:16]};
+                    2'b11: load_data_selected = {24'b0, cpu_dmem_rdata[31:24]};
+                endcase
+            end
+            3'b101: begin  // LHU - load halfword unsigned
+                case (mem_addr_lo[1])
+                    1'b0: load_data_selected = {16'b0, cpu_dmem_rdata[15:0]};
+                    1'b1: load_data_selected = {16'b0, cpu_dmem_rdata[31:16]};
+                endcase
+            end
+            default: load_data_selected = cpu_dmem_rdata;
+        endcase
+    end
+    
+    wire [31:0] mem_load_data = load_data_selected;
 
     // =========================================================================
     // MEM/WB Pipeline Register
@@ -475,6 +599,8 @@ module riscv_soc (
     logic [31:0] wb_alu_result;
     logic [31:0] wb_load_data;
     logic        wb_mem_read;
+    logic        wb_jump;
+    logic [31:0] wb_pc_plus4;
     // wb_valid declared in forward declarations
     
     always_ff @(posedge clk) begin
@@ -482,12 +608,15 @@ module riscv_soc (
             wb_valid     <= 1'b0;
             wb_reg_write <= 1'b0;
             wb_mem_read  <= 1'b0;
+            wb_jump      <= 1'b0;
         end else if (cpu_running) begin
             wb_alu_result <= mem_alu_result;
             wb_load_data  <= mem_load_data;
+            wb_pc_plus4   <= mem_pc_plus4;
             wb_rd         <= mem_rd;
             wb_reg_write  <= mem_reg_write;
             wb_mem_read   <= mem_mem_read;
+            wb_jump       <= mem_jump;
             wb_valid      <= mem_valid;
         end
     end
@@ -496,7 +625,10 @@ module riscv_soc (
     // Stage 5: WB (Write Back)
     // =========================================================================
     
-    assign wb_rd_data = wb_mem_read ? wb_load_data : wb_alu_result;
+    // Select write-back data: PC+4 for jumps, load data for loads, ALU result otherwise
+    assign wb_rd_data = wb_jump     ? wb_pc_plus4 :
+                        wb_mem_read ? wb_load_data :
+                        wb_alu_result;
 
     // =========================================================================
     // CPU Logger (logs CPU memory accesses for debug)

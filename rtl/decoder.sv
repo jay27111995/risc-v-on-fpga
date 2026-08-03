@@ -35,13 +35,18 @@ module decoder (
     output logic [31:0] imm,
     
     // Control signals
-    output logic [2:0]  alu_op,      // ALU operation
+    output logic [3:0]  alu_op,      // ALU operation (4 bits)
     output logic        reg_write,   // write to register file?
     output logic        alu_src,     // ALU source: 0=rs2, 1=immediate
     output logic        mem_read,    // load from memory?
     output logic        mem_write,   // store to memory?
+    output logic [2:0]  mem_op,      // memory size: 000=LB, 001=LH, 010=LW, 100=LBU, 101=LHU
     output logic        branch,      // branch instruction?
-    output logic [2:0]  branch_op    // branch type (funct3): 000=BEQ, 001=BNE, etc.
+    output logic [2:0]  branch_op,   // branch type (funct3): 000=BEQ, 001=BNE, etc.
+    output logic        jump,        // JAL or JALR instruction?
+    output logic        jump_reg,    // JALR (jump to register+offset)?
+    output logic        lui,         // LUI instruction (rd = imm)?
+    output logic        auipc        // AUIPC instruction (rd = PC + imm)?
 );
 
 // Extract fixed fields (same position for all formats)
@@ -64,61 +69,86 @@ localparam OP_ITYPE  = 7'b0010011;  // ADDI, ANDI, ORI, XORI
 localparam OP_LOAD   = 7'b0000011;  // LW
 localparam OP_STORE  = 7'b0100011;  // SW
 localparam OP_BRANCH = 7'b1100011;  // BEQ, BNE
+localparam OP_JAL    = 7'b1101111;  // JAL
+localparam OP_JALR   = 7'b1100111;  // JALR
+localparam OP_LUI    = 7'b0110111;  // LUI
+localparam OP_AUIPC  = 7'b0010111;  // AUIPC
 
 // Decode logic
 always_comb begin
     // Defaults
     imm = 32'b0;
-    alu_op = 3'b000;
+    alu_op = 4'b0000;
     reg_write = 0;
     alu_src = 0;
     mem_read = 0;
     mem_write = 0;
+    mem_op = 3'b010;  // Default to word (LW/SW)
     branch = 0;
     branch_op = 3'b000;
+    jump = 0;
+    jump_reg = 0;
+    lui = 0;
+    auipc = 0;
     
     case (opcode)
-        OP_RTYPE: begin  // R-type: ADD, SUB, AND, OR, XOR
+        OP_RTYPE: begin  // R-type: ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU
             reg_write = 1;
             alu_src = 0;  // use rs2
             case (funct3)
-                3'b000: alu_op = (funct7[5]) ? 3'b001 : 3'b000;  // SUB or ADD
-                3'b111: alu_op = 3'b010;  // AND
-                3'b110: alu_op = 3'b011;  // OR
-                3'b100: alu_op = 3'b100;  // XOR
-                default: alu_op = 3'b000;
+                3'b000: alu_op = (funct7[5]) ? 4'b0001 : 4'b0000;  // SUB or ADD
+                3'b001: alu_op = 4'b0101;  // SLL
+                3'b010: alu_op = 4'b1000;  // SLT
+                3'b011: alu_op = 4'b1001;  // SLTU
+                3'b100: alu_op = 4'b0100;  // XOR
+                3'b101: alu_op = (funct7[5]) ? 4'b0111 : 4'b0110;  // SRA or SRL
+                3'b110: alu_op = 4'b0011;  // OR
+                3'b111: alu_op = 4'b0010;  // AND
+                default: alu_op = 4'b0000;
             endcase
         end
         
-        OP_ITYPE: begin  // I-type: ADDI, ANDI, ORI, XORI
+        OP_ITYPE: begin  // I-type: ADDI, ANDI, ORI, XORI, SLLI, SRLI, SRAI, SLTI, SLTIU
             reg_write = 1;
             alu_src = 1;  // use immediate
             // I-type immediate: instr[31:20] = 12-bit signed immediate
             // Sign-extend to 32 bits by replicating bit 31
             imm = {{20{instr[31]}}, instr[31:20]};
             case (funct3)
-                3'b000: alu_op = 3'b000;  // ADDI
-                3'b111: alu_op = 3'b010;  // ANDI
-                3'b110: alu_op = 3'b011;  // ORI
-                3'b100: alu_op = 3'b100;  // XORI
-                default: alu_op = 3'b000;
+                3'b000: alu_op = 4'b0000;  // ADDI
+                3'b010: alu_op = 4'b1000;  // SLTI
+                3'b011: alu_op = 4'b1001;  // SLTIU
+                3'b001: begin              // SLLI
+                    alu_op = 4'b0101;
+                    imm = {27'b0, instr[24:20]};  // shamt is bottom 5 bits
+                end
+                3'b101: begin             // SRLI or SRAI
+                    alu_op = (instr[30]) ? 4'b0111 : 4'b0110;
+                    imm = {27'b0, instr[24:20]};  // shamt is bottom 5 bits
+                end
+                3'b111: alu_op = 4'b0010;  // ANDI
+                3'b110: alu_op = 4'b0011;  // ORI
+                3'b100: alu_op = 4'b0100;  // XORI
+                default: alu_op = 4'b0000;
             endcase
         end
         
-        OP_LOAD: begin  // LW: rd = memory[rs1 + imm]
+        OP_LOAD: begin  // LB, LH, LW, LBU, LHU: rd = memory[rs1 + imm]
             reg_write = 1;   // write loaded data to rd
             alu_src = 1;     // ALU uses immediate
             mem_read = 1;    // read from data memory
-            alu_op = 3'b000; // ADD: address = rs1 + imm
+            mem_op = funct3; // 000=LB, 001=LH, 010=LW, 100=LBU, 101=LHU
+            alu_op = 4'b0000; // ADD: address = rs1 + imm
             // I-type immediate (same as ADDI)
             imm = {{20{instr[31]}}, instr[31:20]};
         end
         
-        OP_STORE: begin  // SW: memory[rs1 + imm] = rs2
+        OP_STORE: begin  // SB, SH, SW: memory[rs1 + imm] = rs2
             reg_write = 0;   // no register write
             alu_src = 1;     // ALU uses immediate
             mem_write = 1;   // write to data memory
-            alu_op = 3'b000; // ADD: address = rs1 + imm
+            mem_op = funct3; // 000=SB, 001=SH, 010=SW
+            alu_op = 4'b0000; // ADD: address = rs1 + imm
             // S-type immediate: split across instr[31:25] and instr[11:7]
             imm = {{20{instr[31]}}, instr[31:25], instr[11:7]};
         end
@@ -126,9 +156,40 @@ always_comb begin
         OP_BRANCH: begin  // BEQ, BNE: if (condition) PC += imm
             branch = 1;
             branch_op = funct3;  // 000=BEQ, 001=BNE, 100=BLT, 101=BGE, 110=BLTU, 111=BGEU
-            alu_op = 3'b001; // SUB: compare rs1 - rs2, check zero flag
+            alu_op = 4'b0001; // SUB: compare rs1 - rs2, check zero flag
             // B-type immediate: imm[12|10:5|4:1|11], shifted left by 1 (2-byte aligned)
             imm = {{20{instr[31]}}, instr[7], instr[30:25], instr[11:8], 1'b0};
+        end
+        
+        OP_JAL: begin  // JAL: rd = PC + 4, PC = PC + imm
+            reg_write = 1;   // Write PC+4 to rd
+            jump = 1;
+            // J-type immediate: imm[20|10:1|11|19:12], shifted left by 1
+            imm = {{12{instr[31]}}, instr[19:12], instr[20], instr[30:21], 1'b0};
+        end
+        
+        OP_JALR: begin  // JALR: rd = PC + 4, PC = rs1 + imm
+            reg_write = 1;   // Write PC+4 to rd
+            jump = 1;
+            jump_reg = 1;    // Target is rs1 + imm
+            alu_src = 1;     // ALU uses immediate
+            alu_op = 4'b0000; // ADD: compute rs1 + imm
+            // I-type immediate
+            imm = {{20{instr[31]}}, instr[31:20]};
+        end
+        
+        OP_LUI: begin  // LUI: rd = imm << 12
+            reg_write = 1;
+            lui = 1;
+            // U-type immediate: upper 20 bits, lower 12 bits are 0
+            imm = {instr[31:12], 12'b0};
+        end
+        
+        OP_AUIPC: begin  // AUIPC: rd = PC + (imm << 12)
+            reg_write = 1;
+            auipc = 1;
+            // U-type immediate: upper 20 bits, lower 12 bits are 0
+            imm = {instr[31:12], 12'b0};
         end
         
         default: begin

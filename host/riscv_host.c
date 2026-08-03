@@ -362,13 +362,260 @@ int main(int argc, char *argv[]) {
     printf("  Test 6: %s\n", test6_pass ? "PASSED" : "FAILED");
 
     // =========================================================================
+    // Test 7: Shift operations (SLL, SRL, SRA)
+    // =========================================================================
+    printf("\n=== Test 7: Shifts (SLL, SRL, SRA) ===\n");
+    uint32_t program7[] = {
+        0x00800093,  // ADDI x1, x0, 8      ; x1 = 8
+        0x00200113,  // ADDI x2, x0, 2      ; x2 = 2 (shift amount)
+        0x002091B3,  // SLL  x3, x1, x2     ; x3 = 8 << 2 = 32
+        0x0020D233,  // SRL  x4, x1, x2     ; x4 = 8 >> 2 = 2
+        0x80000293,  // ADDI x5, x0, -2048  ; x5 = 0xFFFFF800 (negative)
+        0x4020D333,  // SRA  x6, x5, x2     ; x6 = 0xFFFFF800 >>> 2 = 0xFFFFFE00
+        0x00302C23,  // SW   x3, 24(x0)     ; dmem[24] = 32
+        0x00402E23,  // SW   x4, 28(x0)     ; dmem[28] = 2
+        0x02602023,  // SW   x6, 32(x0)     ; dmem[32] = 0xFFFFFE00
+        0x00000063,  // BEQ  x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program7, sizeof(program7)/sizeof(program7[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t sll_result = read_dmem(6);   // dmem[24]
+    uint32_t srl_result = read_dmem(7);   // dmem[28]
+    uint32_t sra_result = read_dmem(8);   // dmem[32]
+    printf("  SLL: %u (expected 32)\n", sll_result);
+    printf("  SRL: %u (expected 2)\n", srl_result);
+    printf("  SRA: 0x%08X (expected 0xFFFFFE00)\n", sra_result);
+    int test7_pass = (sll_result == 32 && srl_result == 2 && sra_result == 0xFFFFFE00);
+    printf("  Test 7: %s\n", test7_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 8: Immediate shifts (SLLI, SRLI, SRAI)
+    // =========================================================================
+    printf("\n=== Test 8: Immediate Shifts (SLLI, SRLI, SRAI) ===\n");
+    uint32_t program8[] = {
+        0x00100093,  // ADDI x1, x0, 1      ; x1 = 1
+        0x01009113,  // SLLI x2, x1, 16     ; x2 = 1 << 16 = 65536
+        0x00815193,  // SRLI x3, x2, 8      ; x3 = 65536 >> 8 = 256
+        0x80000213,  // ADDI x4, x0, -2048  ; x4 = 0xFFFFF800
+        0x40425293,  // SRAI x5, x4, 4      ; x5 = 0xFFFFF800 >>> 4 = 0xFFFFFF80
+        0x02202223,  // SW   x2, 36(x0)     ; dmem[36] = 65536
+        0x02302423,  // SW   x3, 40(x0)     ; dmem[40] = 256
+        0x02502623,  // SW   x5, 44(x0)     ; dmem[44] = 0xFFFFFF80
+        0x00000063,  // BEQ  x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program8, sizeof(program8)/sizeof(program8[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t slli_result = read_dmem(9);   // dmem[36]
+    uint32_t srli_result = read_dmem(10);  // dmem[40]
+    uint32_t srai_result = read_dmem(11);  // dmem[44]
+    printf("  SLLI: %u (expected 65536)\n", slli_result);
+    printf("  SRLI: %u (expected 256)\n", srli_result);
+    printf("  SRAI: 0x%08X (expected 0xFFFFFF80)\n", srai_result);
+    int test8_pass = (slli_result == 65536 && srli_result == 256 && srai_result == 0xFFFFFF80);
+    printf("  Test 8: %s\n", test8_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 9: SLT/SLTU (set less than)
+    // =========================================================================
+    printf("\n=== Test 9: SLT/SLTU (set less than) ===\n");
+    uint32_t program9[] = {
+        0xFFB00093,  // ADDI x1, x0, -5     ; x1 = -5 (0xFFFFFFFB)
+        0x00300113,  // ADDI x2, x0, 3      ; x2 = 3
+        0x0020A1B3,  // SLT  x3, x1, x2     ; x3 = (-5 < 3) = 1 (signed)
+        0x0020B233,  // SLTU x4, x1, x2     ; x4 = (0xFFFFFFFB < 3) = 0 (unsigned)
+        0x02302823,  // SW   x3, 48(x0)     ; dmem[48] = 1
+        0x02402A23,  // SW   x4, 52(x0)     ; dmem[52] = 0
+        0x00000063,  // BEQ  x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program9, sizeof(program9)/sizeof(program9[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t slt_result = read_dmem(12);   // dmem[48]
+    uint32_t sltu_result = read_dmem(13);  // dmem[52]
+    printf("  SLT:  %u (expected 1, -5 < 3 signed)\n", slt_result);
+    printf("  SLTU: %u (expected 0, 0xFFFFFFFB > 3 unsigned)\n", sltu_result);
+    int test9_pass = (slt_result == 1 && sltu_result == 0);
+    printf("  Test 9: %s\n", test9_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 10: JAL (jump and link)
+    // =========================================================================
+    printf("\n=== Test 10: JAL (jump and link) ===\n");
+    uint32_t program10[] = {
+        0x00500093,  // 0x00: ADDI x1, x0, 5   ; x1 = 5
+        0x00C000EF,  // 0x04: JAL x1, 12       ; jump to 0x10, x1 = 8 (return addr)
+        0x02102C23,  // 0x08: SW x1, 56(x0)    ; dmem[56] = x1 (should be 8)
+        0x00000063,  // 0x0C: BEQ x0, x0, 0    ; loop
+        0x00000013,  // 0x10: NOP (landing pad)
+        0xFF5FF06F,  // 0x14: JAL x0, -12      ; jump back to 0x08
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program10, sizeof(program10)/sizeof(program10[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t jal_result = read_dmem(14);  // dmem[56]
+    printf("  Return addr: %u (expected 8)\n", jal_result);
+    int test10_pass = (jal_result == 8);
+    printf("  Test 10: %s\n", test10_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 11: JALR (jump and link register)
+    // =========================================================================
+    printf("\n=== Test 11: JALR (jump and link register) ===\n");
+    uint32_t program11[] = {
+        0x00300513,  // 0x00: ADDI x10, x0, 3  ; x10 = 3
+        0x00C000EF,  // 0x04: JAL x1, 12       ; call func at 0x10, x1 = 8
+        0x02A02E23,  // 0x08: SW x10, 60(x0)   ; dmem[60] = x10 (should be 8)
+        0x00000063,  // 0x0C: BEQ x0, x0, 0    ; loop
+        0x00550513,  // 0x10: ADDI x10, x10, 5 ; func: x10 = x10 + 5 = 8
+        0x00008067,  // 0x14: JALR x0, x1, 0   ; return to x1
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program11, sizeof(program11)/sizeof(program11[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t jalr_result = read_dmem(15);  // dmem[60]
+    printf("  Function result: %u (expected 8, 3+5)\n", jalr_result);
+    int test11_pass = (jalr_result == 8);
+    printf("  Test 11: %s\n", test11_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 12: LUI (load upper immediate)
+    // =========================================================================
+    printf("\n=== Test 12: LUI (load upper immediate) ===\n");
+    uint32_t program12[] = {
+        0xDEADB0B7,  // LUI x1, 0xDEADB     ; x1 = 0xDEADB000
+        0x04102023,  // SW  x1, 64(x0)      ; dmem[64] = 0xDEADB000
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program12, sizeof(program12)/sizeof(program12[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t lui_result = read_dmem(16);  // dmem[64]
+    printf("  LUI result: 0x%08X (expected 0xDEADB000)\n", lui_result);
+    int test12_pass = (lui_result == 0xDEADB000);
+    printf("  Test 12: %s\n", test12_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 13: AUIPC (add upper immediate to PC)
+    // =========================================================================
+    printf("\n=== Test 13: AUIPC (add upper immediate to PC) ===\n");
+    uint32_t program13[] = {
+        0x00001097,  // AUIPC x1, 1         ; x1 = PC + 0x1000 = 0 + 0x1000
+        0x04102223,  // SW    x1, 68(x0)    ; dmem[68] = 0x1000
+        0x00000063,  // BEQ   x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program13, sizeof(program13)/sizeof(program13[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t auipc_result = read_dmem(17);  // dmem[68]
+    printf("  AUIPC result: 0x%08X (expected 0x1000)\n", auipc_result);
+    int test13_pass = (auipc_result == 0x1000);
+    printf("  Test 13: %s\n", test13_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 14: SB/LB/LBU (store/load byte)
+    // =========================================================================
+    printf("\n=== Test 14: SB/LB/LBU (byte operations) ===\n");
+    uint32_t program14[] = {
+        0x0FF00093,  // ADDI x1, x0, 255    ; x1 = 0xFF
+        0x04800113,  // ADDI x2, x0, 72     ; x2 = 72 (address)
+        0x00110023,  // SB   x1, 0(x2)      ; mem[72] byte 0 = 0xFF
+        0x00010183,  // LB   x3, 0(x2)      ; x3 = sign_ext(0xFF) = -1
+        0x00014203,  // LBU  x4, 0(x2)      ; x4 = zero_ext(0xFF) = 255
+        0x04302423,  // SW   x3, 72(x0)     ; dmem[72] = -1 (overwrites)
+        0x04402623,  // SW   x4, 76(x0)     ; dmem[76] = 255
+        0x00000063,  // BEQ  x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program14, sizeof(program14)/sizeof(program14[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t lb_result = read_dmem(18);   // dmem[72]
+    uint32_t lbu_result = read_dmem(19);  // dmem[76]
+    printf("  LB:  0x%08X (expected 0xFFFFFFFF, sign extended)\n", lb_result);
+    printf("  LBU: 0x%08X (expected 0x000000FF, zero extended)\n", lbu_result);
+    int test14_pass = (lb_result == 0xFFFFFFFF && lbu_result == 0x000000FF);
+    printf("  Test 14: %s\n", test14_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
+    // Test 15: SH/LH/LHU (store/load halfword)
+    // =========================================================================
+    printf("\n=== Test 15: SH/LH/LHU (halfword operations) ===\n");
+    uint32_t program15[] = {
+        0xFFF00093,  // ADDI x1, x0, -1     ; x1 = 0xFFFFFFFF
+        0x05000113,  // ADDI x2, x0, 80     ; x2 = 80 (address)
+        0x00111023,  // SH   x1, 0(x2)      ; mem[80] = 0xFFFF (halfword)
+        0x00011183,  // LH   x3, 0(x2)      ; x3 = sign_ext(0xFFFF) = -1
+        0x00015203,  // LHU  x4, 0(x2)      ; x4 = zero_ext(0xFFFF) = 65535
+        0x04302823,  // SW   x3, 80(x0)     ; dmem[80] = -1 (overwrites)
+        0x04402A23,  // SW   x4, 84(x0)     ; dmem[84] = 65535
+        0x00000063,  // BEQ  x0, x0, 0
+    };
+    
+    write32(BAR_CTRL, 0x02);
+    usleep(1000);
+    load_program(program15, sizeof(program15)/sizeof(program15[0]));
+    cpu_run();
+    usleep(10000);
+    cpu_stop();
+    
+    uint32_t lh_result = read_dmem(20);   // dmem[80]
+    uint32_t lhu_result = read_dmem(21);  // dmem[84]
+    printf("  LH:  0x%08X (expected 0xFFFFFFFF, sign extended)\n", lh_result);
+    printf("  LHU: 0x%08X (expected 0x0000FFFF, zero extended)\n", lhu_result);
+    int test15_pass = (lh_result == 0xFFFFFFFF && lhu_result == 0x0000FFFF);
+    printf("  Test 15: %s\n", test15_pass ? "PASSED" : "FAILED");
+
+    // =========================================================================
     // Summary
     // =========================================================================
     printf("\n=== Test Summary ===\n");
-    int total_pass = test1_pass + test2_pass + test3_pass + test4_pass + test5_pass + test6_pass;
-    printf("  Passed: %d/6\n", total_pass);
+    int total_pass = test1_pass + test2_pass + test3_pass + test4_pass + test5_pass + test6_pass +
+                     test7_pass + test8_pass + test9_pass + test10_pass + test11_pass + test12_pass +
+                     test13_pass + test14_pass + test15_pass;
+    printf("  Passed: %d/15\n", total_pass);
     
-    if (total_pass == 6) {
+    if (total_pass == 15) {
         printf("\n=== ALL TESTS PASSED ===\n");
     } else {
         printf("\n=== SOME TESTS FAILED ===\n");
@@ -401,5 +648,5 @@ int main(int argc, char *argv[]) {
         printf("  IPC: %.2f\n", ipc);
     }
 
-    return (total_pass == 6) ? 0 : 1;
+    return (total_pass == 15) ? 0 : 1;
 }
