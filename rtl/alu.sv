@@ -6,7 +6,9 @@ module alu (
     input  logic [31:0] b,       // second operand
     input  logic [2:0]  op,      // which operation
     output logic [31:0] result,  // answer
-    output logic        zero     // is result zero? (for branches)
+    output logic        zero,    // is result zero? (for BEQ, BNE)
+    output logic        lt,      // a < b signed? (for BLT, BGE)
+    output logic        ltu      // a < b unsigned? (for BLTU, BGEU)
 );
 
 // Operation codes
@@ -27,7 +29,9 @@ always_comb begin
     endcase
 end
 
-// Zero flag - used for branch instructions (BEQ, BNE)
-assign zero = (result == 0);
+// Comparison flags - used for branch instructions
+assign zero = (result == 0);                        // BEQ, BNE
+assign lt   = ($signed(a) < $signed(b));            // BLT, BGE (signed)
+assign ltu  = (a < b);                              // BLTU, BGEU (unsigned)
 
 endmodule

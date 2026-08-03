@@ -293,6 +293,7 @@ module riscv_soc (
     logic [31:0] id_imm;
     logic [2:0]  id_alu_op;
     logic        id_reg_write, id_alu_src, id_mem_read, id_mem_write, id_branch;
+    logic [2:0]  id_branch_op;
     
     decoder decoder_inst (
         .instr     (id_instr),
@@ -305,7 +306,8 @@ module riscv_soc (
         .alu_src   (id_alu_src),
         .mem_read  (id_mem_read),
         .mem_write (id_mem_write),
-        .branch    (id_branch)
+        .branch    (id_branch),
+        .branch_op (id_branch_op)
     );
     
     logic [31:0] id_rs1_data, id_rs2_data;
@@ -333,6 +335,7 @@ module riscv_soc (
     logic [31:0] ex_imm;
     logic [2:0]  ex_alu_op;
     logic        ex_reg_write, ex_alu_src, ex_mem_write, ex_branch;
+    logic [2:0]  ex_branch_op;
     
     always_ff @(posedge clk) begin
         if (cpu_rst || flush || stall) begin
@@ -355,6 +358,7 @@ module riscv_soc (
             ex_mem_read  <= id_mem_read  && id_valid;
             ex_mem_write <= id_mem_write && id_valid;
             ex_branch    <= id_branch    && id_valid;
+            ex_branch_op <= id_branch_op;
             ex_valid     <= id_valid;
         end
     end
@@ -380,13 +384,17 @@ module riscv_soc (
     
     logic [31:0] ex_alu_result;
     logic        ex_alu_zero;
+    logic        ex_alu_lt;    // signed less-than
+    logic        ex_alu_ltu;   // unsigned less-than
     
     alu alu_inst (
         .a      (ex_alu_a),
         .b      (ex_alu_b),
         .op     (ex_alu_op),
         .result (ex_alu_result),
-        .zero   (ex_alu_zero)
+        .zero   (ex_alu_zero),
+        .lt     (ex_alu_lt),
+        .ltu    (ex_alu_ltu)
     );
 
     // =========================================================================
@@ -396,8 +404,11 @@ module riscv_soc (
     logic [31:0] mem_store_data;
     // mem_mem_write, mem_branch declared in forward declarations
     logic        mem_alu_zero;
+    logic        mem_alu_lt;   // signed less-than
+    logic        mem_alu_ltu;  // unsigned less-than
     logic [31:0] mem_pc;
     logic [31:0] mem_imm;
+    logic [2:0]  mem_branch_op;
     
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -414,7 +425,10 @@ module riscv_soc (
             mem_mem_read   <= ex_mem_read;
             mem_mem_write  <= ex_mem_write;
             mem_branch     <= ex_branch && ex_valid;
+            mem_branch_op  <= ex_branch_op;
             mem_alu_zero   <= ex_alu_zero;
+            mem_alu_lt     <= ex_alu_lt;
+            mem_alu_ltu    <= ex_alu_ltu;
             mem_pc         <= ex_pc;
             mem_imm        <= ex_imm;
             mem_valid      <= ex_valid;
@@ -425,7 +439,27 @@ module riscv_soc (
     // Stage 4: MEM (Memory Access)
     // =========================================================================
     
-    assign mem_branch_taken  = mem_branch && mem_alu_zero && mem_valid;
+    // Branch condition based on branch_op (funct3)
+    // 000 = BEQ  (branch if equal)
+    // 001 = BNE  (branch if not equal)
+    // 100 = BLT  (branch if less than, signed)
+    // 101 = BGE  (branch if greater or equal, signed)
+    // 110 = BLTU (branch if less than, unsigned)
+    // 111 = BGEU (branch if greater or equal, unsigned)
+    logic branch_condition;
+    always_comb begin
+        case (mem_branch_op)
+            3'b000:  branch_condition = mem_alu_zero;    // BEQ:  rs1 == rs2
+            3'b001:  branch_condition = !mem_alu_zero;   // BNE:  rs1 != rs2
+            3'b100:  branch_condition = mem_alu_lt;      // BLT:  rs1 < rs2 (signed)
+            3'b101:  branch_condition = !mem_alu_lt;     // BGE:  rs1 >= rs2 (signed)
+            3'b110:  branch_condition = mem_alu_ltu;     // BLTU: rs1 < rs2 (unsigned)
+            3'b111:  branch_condition = !mem_alu_ltu;    // BGEU: rs1 >= rs2 (unsigned)
+            default: branch_condition = 1'b0;
+        endcase
+    end
+    
+    assign mem_branch_taken  = mem_branch && branch_condition && mem_valid;
     assign mem_branch_target = mem_pc + mem_imm;
     
     assign cpu_dmem_addr  = mem_alu_result;
