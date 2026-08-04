@@ -547,57 +547,18 @@ module riscv_soc (
     
     // -------------------------------------------------------------------------
     // Load data selection and sign extension
-    // mem_op: 000=LB, 001=LH, 010=LW, 100=LBU, 101=LHU
-    // -------------------------------------------------------------------------
-    logic [31:0] load_data_selected;
-    
-    always_comb begin
-        load_data_selected = cpu_dmem_rdata;  // Default: full word (LW)
-        
-        case (mem_mem_op)
-            3'b000: begin  // LB - load byte signed
-                case (mem_addr_lo)
-                    2'b00: load_data_selected = {{24{cpu_dmem_rdata[7]}},  cpu_dmem_rdata[7:0]};
-                    2'b01: load_data_selected = {{24{cpu_dmem_rdata[15]}}, cpu_dmem_rdata[15:8]};
-                    2'b10: load_data_selected = {{24{cpu_dmem_rdata[23]}}, cpu_dmem_rdata[23:16]};
-                    2'b11: load_data_selected = {{24{cpu_dmem_rdata[31]}}, cpu_dmem_rdata[31:24]};
-                endcase
-            end
-            3'b001: begin  // LH - load halfword signed
-                case (mem_addr_lo[1])
-                    1'b0: load_data_selected = {{16{cpu_dmem_rdata[15]}}, cpu_dmem_rdata[15:0]};
-                    1'b1: load_data_selected = {{16{cpu_dmem_rdata[31]}}, cpu_dmem_rdata[31:16]};
-                endcase
-            end
-            3'b010: begin  // LW - load word
-                load_data_selected = cpu_dmem_rdata;
-            end
-            3'b100: begin  // LBU - load byte unsigned
-                case (mem_addr_lo)
-                    2'b00: load_data_selected = {24'b0, cpu_dmem_rdata[7:0]};
-                    2'b01: load_data_selected = {24'b0, cpu_dmem_rdata[15:8]};
-                    2'b10: load_data_selected = {24'b0, cpu_dmem_rdata[23:16]};
-                    2'b11: load_data_selected = {24'b0, cpu_dmem_rdata[31:24]};
-                endcase
-            end
-            3'b101: begin  // LHU - load halfword unsigned
-                case (mem_addr_lo[1])
-                    1'b0: load_data_selected = {16'b0, cpu_dmem_rdata[15:0]};
-                    1'b1: load_data_selected = {16'b0, cpu_dmem_rdata[31:16]};
-                endcase
-            end
-            default: load_data_selected = cpu_dmem_rdata;
-        endcase
-    end
-    
-    wire [31:0] mem_load_data = load_data_selected;
+    // Load data selection moved to WB stage for better timing
+    // Pass raw DMEM data through MEM/WB register
+    wire [31:0] mem_load_data_raw = cpu_dmem_rdata;
 
     // =========================================================================
     // MEM/WB Pipeline Register
     // =========================================================================
     
     logic [31:0] wb_alu_result;
-    logic [31:0] wb_load_data;
+    logic [31:0] wb_load_data_raw;
+    logic [2:0]  wb_mem_op;
+    logic [1:0]  wb_addr_lo;
     logic        wb_mem_read;
     logic        wb_jump;
     logic [31:0] wb_pc_plus4;
@@ -610,20 +571,63 @@ module riscv_soc (
             wb_mem_read  <= 1'b0;
             wb_jump      <= 1'b0;
         end else if (cpu_running) begin
-            wb_alu_result <= mem_alu_result;
-            wb_load_data  <= mem_load_data;
-            wb_pc_plus4   <= mem_pc_plus4;
-            wb_rd         <= mem_rd;
-            wb_reg_write  <= mem_reg_write;
-            wb_mem_read   <= mem_mem_read;
-            wb_jump       <= mem_jump;
-            wb_valid      <= mem_valid;
+            wb_alu_result    <= mem_alu_result;
+            wb_load_data_raw <= mem_load_data_raw;
+            wb_mem_op        <= mem_mem_op;
+            wb_addr_lo       <= mem_addr_lo;
+            wb_pc_plus4      <= mem_pc_plus4;
+            wb_rd            <= mem_rd;
+            wb_reg_write     <= mem_reg_write;
+            wb_mem_read      <= mem_mem_read;
+            wb_jump          <= mem_jump;
+            wb_valid         <= mem_valid;
         end
     end
 
     // =========================================================================
     // Stage 5: WB (Write Back)
     // =========================================================================
+    
+    // Load byte/halfword selection and sign/zero extension (moved from MEM for timing)
+    logic [31:0] wb_load_data;
+    always_comb begin
+        wb_load_data = wb_load_data_raw;  // Default: full word (LW)
+        
+        case (wb_mem_op)
+            3'b000: begin  // LB - load byte signed
+                case (wb_addr_lo)
+                    2'b00: wb_load_data = {{24{wb_load_data_raw[7]}},  wb_load_data_raw[7:0]};
+                    2'b01: wb_load_data = {{24{wb_load_data_raw[15]}}, wb_load_data_raw[15:8]};
+                    2'b10: wb_load_data = {{24{wb_load_data_raw[23]}}, wb_load_data_raw[23:16]};
+                    2'b11: wb_load_data = {{24{wb_load_data_raw[31]}}, wb_load_data_raw[31:24]};
+                endcase
+            end
+            3'b001: begin  // LH - load halfword signed
+                case (wb_addr_lo[1])
+                    1'b0: wb_load_data = {{16{wb_load_data_raw[15]}}, wb_load_data_raw[15:0]};
+                    1'b1: wb_load_data = {{16{wb_load_data_raw[31]}}, wb_load_data_raw[31:16]};
+                endcase
+            end
+            3'b010: begin  // LW - load word
+                wb_load_data = wb_load_data_raw;
+            end
+            3'b100: begin  // LBU - load byte unsigned
+                case (wb_addr_lo)
+                    2'b00: wb_load_data = {24'b0, wb_load_data_raw[7:0]};
+                    2'b01: wb_load_data = {24'b0, wb_load_data_raw[15:8]};
+                    2'b10: wb_load_data = {24'b0, wb_load_data_raw[23:16]};
+                    2'b11: wb_load_data = {24'b0, wb_load_data_raw[31:24]};
+                endcase
+            end
+            3'b101: begin  // LHU - load halfword unsigned
+                case (wb_addr_lo[1])
+                    1'b0: wb_load_data = {16'b0, wb_load_data_raw[15:0]};
+                    1'b1: wb_load_data = {16'b0, wb_load_data_raw[31:16]};
+                endcase
+            end
+            default: wb_load_data = wb_load_data_raw;
+        endcase
+    end
     
     // Select write-back data: PC+4 for jumps, load data for loads, ALU result otherwise
     assign wb_rd_data = wb_jump     ? wb_pc_plus4 :
