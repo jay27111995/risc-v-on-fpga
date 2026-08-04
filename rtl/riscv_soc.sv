@@ -246,11 +246,17 @@ module riscv_soc (
     logic [31:0] mem_branch_target;
     logic [4:0]  mem_rd, ex_rs1, ex_rs2;
 
-    // Load-use hazard (combinational for single-cycle stall)
-    wire hazard_load_use = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
-                           ((ex_rd == id_rs1) || (ex_rd == id_rs2)) && id_valid;
+    // Load-use hazard: stall for 2 cycles when a load is followed by dependent instruction
+    // Cycle 1: Load in EX, dependent in ID -> stall
+    // Cycle 2: Load in MEM, dependent still in ID -> stall again
+    // Cycle 3: Load in WB (writes to regfile), dependent in EX (reads from regfile)
+    // This avoids the long combinational path through the load byte/half mux in WB
+    wire hazard_load_use_ex  = ex_mem_read && ex_valid && (ex_rd != 5'd0) &&
+                               ((ex_rd == id_rs1) || (ex_rd == id_rs2)) && id_valid;
+    wire hazard_load_use_mem = mem_mem_read && mem_valid && (mem_rd != 5'd0) &&
+                               ((mem_rd == id_rs1) || (mem_rd == id_rs2)) && id_valid;
     
-    assign stall = hazard_load_use;
+    assign stall = hazard_load_use_ex || hazard_load_use_mem;
     assign flush = mem_branch_taken;
 
     // =========================================================================
@@ -393,11 +399,13 @@ module riscv_soc (
     
     logic [31:0] mem_alu_result;
     logic        mem_reg_write;
-    // Forwarding
-    wire fwd_mem_rs1 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs1);
-    wire fwd_mem_rs2 = mem_reg_write && (mem_rd != 5'd0) && (mem_rd == ex_rs2);
-    wire fwd_wb_rs1  = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs1) && !fwd_mem_rs1;
-    wire fwd_wb_rs2  = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex_rs2) && !fwd_mem_rs2;
+    // Forwarding from MEM stage (non-loads only, loads use the stall + regfile path)
+    wire fwd_mem_rs1 = mem_reg_write && !mem_mem_read && (mem_rd != 5'd0) && (mem_rd == ex_rs1);
+    wire fwd_mem_rs2 = mem_reg_write && !mem_mem_read && (mem_rd != 5'd0) && (mem_rd == ex_rs2);
+    // No WB forwarding for loads - we stall 2 cycles so value goes through regfile
+    // This avoids the long combinational path through the load byte/half mux
+    wire fwd_wb_rs1  = wb_reg_write && !wb_mem_read && (wb_rd != 5'd0) && (wb_rd == ex_rs1) && !fwd_mem_rs1;
+    wire fwd_wb_rs2  = wb_reg_write && !wb_mem_read && (wb_rd != 5'd0) && (wb_rd == ex_rs2) && !fwd_mem_rs2;
     
     wire [31:0] ex_fwd_rs1 = fwd_mem_rs1 ? mem_alu_result : fwd_wb_rs1 ? wb_rd_data : ex_rs1_data;
     wire [31:0] ex_fwd_rs2 = fwd_mem_rs2 ? mem_alu_result : fwd_wb_rs2 ? wb_rd_data : ex_rs2_data;
