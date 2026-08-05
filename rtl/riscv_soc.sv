@@ -3,17 +3,29 @@
 //
 // A minimal RV32I CPU with classic 5-stage pipeline.
 //
-// Memory Map:
-//   0x0000-0x00FF  Control registers
-//   0x1000-0x1FFF  IMEM - 4KB instruction memory (32-bit)
-//   0x2000-0x3FFF  DMEM - 8KB data memory (32-bit)
-//   0x4000-0x4FFF  Bus sniffer logs (in axi_core_hw)
-//   0x5000-0x5FFF  CPU logger logs
+// Memory Map (active region selected by addr[15:12]):
+//   0x0xxx  Control registers (addr[15:12] == 4'h0)
+//   0x1xxx  IMEM - 4KB instruction memory (addr[15:12] == 4'h1)
+//   0x2xxx  DMEM - 8KB data memory (addr[15:12] == 4'h2 or 4'h3)
+//   0x4xxx  Bus sniffer logs (in axi_core_hw)
+//   0x5xxx  CPU logger logs
 //
-// Control Registers:
-//   0x00  CTRL    [0] RUN, [1] RESET
-//   0x08  STATUS  [0] RUNNING
-//   0x10  PC      Current program counter
+// Address Decoding:
+//   addr[15:12] = region select (4 bits)
+//   addr[11:2]  = word index within region (ignore addr[1:0] byte offset)
+//   addr[7:2]   = used for control reg decode (6 bits = 64 registers max)
+//
+// Control Registers (0x0xxx):
+//   0x00  CTRL    [0] RUN, [1] RESET           (addr[7:2] == 0)
+//   0x08  STATUS  [0] RUNNING                  (addr[7:2] == 2)
+//   0x10  PC      Current program counter      (addr[7:2] == 4)
+//   0x20  CYCLES  Performance counter          (addr[7:2] == 8)
+//   0x24  INSTRS  Instructions retired         (addr[7:2] == 9)
+//   0x28  STALLS  Stall cycles                 (addr[7:2] == 10)
+//   0x2C  BRANCHES Branch count                (addr[7:2] == 11)
+//   0x30  BR_TAKEN Branches taken              (addr[7:2] == 12)
+//   0x34  LOADS   Load count                   (addr[7:2] == 13)
+//   0x38  STORES  Store count                  (addr[7:2] == 14)
 //
 // CPU Logger Registers (0x5xxx):
 //   0x5000  LOG_COUNT   Total transactions logged
