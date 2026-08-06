@@ -1029,13 +1029,431 @@ int main(int argc, char** argv) {
     } else {
         printf("  SH/LH test PASSED!\n");
     }
-    
+
+    // =========================================================================
+    // Test 19: SUB instruction
+    // =========================================================================
+    printf("\n=== Test 19: SUB (subtract) ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    const uint32_t sub_program[] = {
+        0x00A00093,  // ADDI x1, x0, 10    ; x1 = 10
+        0x00300113,  // ADDI x2, x0, 3     ; x2 = 3
+        0x402081B3,  // SUB x3, x1, x2     ; x3 = 10 - 3 = 7
+        0x00302023,  // SW x3, 0(x0)       ; dmem[0] = 7
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 5; i += 2) {
+        uint32_t even = sub_program[i];
+        uint32_t odd = (i + 1 < 5) ? sub_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t sub_result = (uint32_t)tb.axi_read(0x2000);
+    printf("  DMEM[0] = %u (expected 7, 10 - 3)\n", sub_result);
+    if (sub_result != 7) { printf("  ERROR: SUB test failed!\n"); errors++; }
+    else { printf("  SUB test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 20: AND, OR, XOR instructions
+    // =========================================================================
+    printf("\n=== Test 20: AND, OR, XOR ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    const uint32_t logic_program[] = {
+        0x0FF00093,  // ADDI x1, x0, 0xFF  ; x1 = 0xFF
+        0x0F000113,  // ADDI x2, x0, 0xF0  ; x2 = 0xF0
+        0x0020F1B3,  // AND x3, x1, x2     ; x3 = 0xFF & 0xF0 = 0xF0
+        0x0020E233,  // OR x4, x1, x2      ; x4 = 0xFF | 0xF0 = 0xFF
+        0x0020C2B3,  // XOR x5, x1, x2     ; x5 = 0xFF ^ 0xF0 = 0x0F
+        0x00302023,  // SW x3, 0(x0)       ; dmem[0] = AND result
+        0x00402223,  // SW x4, 4(x0)       ; dmem[4] = OR result
+        0x00502423,  // SW x5, 8(x0)       ; dmem[8] = XOR result
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 9; i += 2) {
+        uint32_t even = logic_program[i];
+        uint32_t odd = (i + 1 < 9) ? logic_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t and_result = (uint32_t)tb.axi_read(0x2000);
+    uint32_t or_result = (uint32_t)tb.axi_read(0x2004);
+    uint32_t xor_result = (uint32_t)tb.axi_read(0x2008);
+    printf("  AND: 0x%02X (expected 0xF0)\n", and_result);
+    printf("  OR:  0x%02X (expected 0xFF)\n", or_result);
+    printf("  XOR: 0x%02X (expected 0x0F)\n", xor_result);
+    if (and_result != 0xF0 || or_result != 0xFF || xor_result != 0x0F) {
+        printf("  ERROR: Logic test failed!\n"); errors++;
+    } else { printf("  AND/OR/XOR test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 21: ANDI, ORI, XORI (immediate versions)
+    // =========================================================================
+    printf("\n=== Test 21: ANDI, ORI, XORI ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    const uint32_t logic_imm_program[] = {
+        0x0FF00093,  // ADDI x1, x0, 0xFF  ; x1 = 0xFF
+        0x0F00F113,  // ANDI x2, x1, 0xF0  ; x2 = 0xFF & 0xF0 = 0xF0
+        0x00F0E193,  // ORI x3, x1, 0x0F   ; x3 = 0xFF | 0x0F = 0xFF
+        0x0F00C213,  // XORI x4, x1, 0xF0  ; x4 = 0xFF ^ 0xF0 = 0x0F
+        0x00202023,  // SW x2, 0(x0)
+        0x00302223,  // SW x3, 4(x0)
+        0x00402423,  // SW x4, 8(x0)
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 8; i += 2) {
+        uint32_t even = logic_imm_program[i];
+        uint32_t odd = (i + 1 < 8) ? logic_imm_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t andi_result = (uint32_t)tb.axi_read(0x2000);
+    uint32_t ori_result = (uint32_t)tb.axi_read(0x2004);
+    uint32_t xori_result = (uint32_t)tb.axi_read(0x2008);
+    printf("  ANDI: 0x%02X (expected 0xF0)\n", andi_result);
+    printf("  ORI:  0x%02X (expected 0xFF)\n", ori_result);
+    printf("  XORI: 0x%02X (expected 0x0F)\n", xori_result);
+    if (andi_result != 0xF0 || ori_result != 0xFF || xori_result != 0x0F) {
+        printf("  ERROR: Logic immediate test failed!\n"); errors++;
+    } else { printf("  ANDI/ORI/XORI test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 22: SRLI, SRAI (immediate shifts)
+    // =========================================================================
+    printf("\n=== Test 22: SRLI, SRAI ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    const uint32_t shift_imm_program[] = {
+        0x08000093,  // ADDI x1, x0, 128   ; x1 = 128 = 0x80
+        0x4010D113,  // SRAI x2, x1, 1     ; x2 = 128 >> 1 = 64 (or -64 if x1 was negative)
+        0x0010D193,  // SRLI x3, x1, 1     ; x3 = 128 >> 1 = 64
+        0x00202023,  // SW x2, 0(x0)       ; dmem[0] = SRAI result
+        0x00302223,  // SW x3, 4(x0)       ; dmem[4] = SRLI result
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 6; i += 2) {
+        uint32_t even = shift_imm_program[i];
+        uint32_t odd = (i + 1 < 6) ? shift_imm_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t srai_result = (uint32_t)tb.axi_read(0x2000);
+    uint32_t srli_result = (uint32_t)tb.axi_read(0x2004);
+    printf("  SRAI(128, 1): %u (expected 64, same as SRLI since MSB=0)\n", srai_result);
+    printf("  SRLI(128, 1): %u (expected 64)\n", srli_result);
+    // For positive numbers, SRAI and SRLI should give same result
+    if (srai_result != 64 || srli_result != 64) {
+        printf("  ERROR: Shift immediate test failed!\n"); errors++;
+    } else { printf("  SRLI/SRAI test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 23: SLTI, SLTIU (set less than immediate)
+    // =========================================================================
+    printf("\n=== Test 23: SLTI, SLTIU ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    const uint32_t slti_program[] = {
+        0xFFB00093,  // ADDI x1, x0, -5    ; x1 = -5
+        0x00A0A113,  // SLTI x2, x1, 10    ; x2 = (-5 < 10) = 1 (signed)
+        0x00A0B193,  // SLTIU x3, x1, 10   ; x3 = (0xFFFFFFFB < 10) = 0 (unsigned)
+        0x00202023,  // SW x2, 0(x0)
+        0x00302223,  // SW x3, 4(x0)
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 6; i += 2) {
+        uint32_t even = slti_program[i];
+        uint32_t odd = (i + 1 < 6) ? slti_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t slti_result = (uint32_t)tb.axi_read(0x2000);
+    uint32_t sltiu_result = (uint32_t)tb.axi_read(0x2004);
+    printf("  SLTI:  %u (expected 1, -5 < 10 signed)\n", slti_result);
+    printf("  SLTIU: %u (expected 0, 0xFFFFFFFB > 10 unsigned)\n", sltiu_result);
+    if (slti_result != 1 || sltiu_result != 0) {
+        printf("  ERROR: SLTI/SLTIU test failed!\n"); errors++;
+    } else { printf("  SLTI/SLTIU test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 24: LW (load word)
+    // =========================================================================
+    printf("\n=== Test 24: LW (load word) ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    // First write a known value, then load it back
+    const uint32_t lw_program[] = {
+        0x12345137,  // LUI x2, 0x12345    ; x2 = 0x12345000
+        0x67810113,  // ADDI x2, x2, 0x678 ; x2 = 0x12345678
+        0x00202023,  // SW x2, 0(x0)       ; dmem[0] = 0x12345678
+        0x00002183,  // LW x3, 0(x0)       ; x3 = dmem[0]
+        0x00302223,  // SW x3, 4(x0)       ; dmem[4] = x3 (should be same)
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 6; i += 2) {
+        uint32_t even = lw_program[i];
+        uint32_t odd = (i + 1 < 6) ? lw_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t lw_result = (uint32_t)tb.axi_read(0x2004);
+    printf("  LW result: 0x%08X (expected 0x12345678)\n", lw_result);
+    if (lw_result != 0x12345678) {
+        printf("  ERROR: LW test failed!\n"); errors++;
+    } else { printf("  LW test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 25: Forwarding chain (EX2 -> EX1 -> EX1)
+    // =========================================================================
+    printf("\n=== Test 25: Forwarding chain (data dependencies) ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    // Chain of dependent instructions - tests forwarding paths
+    const uint32_t fwd_program[] = {
+        0x00500093,  // ADDI x1, x0, 5     ; x1 = 5
+        0x00108113,  // ADDI x2, x1, 1     ; x2 = x1 + 1 = 6 (forward from EX2)
+        0x00210193,  // ADDI x3, x2, 2     ; x3 = x2 + 2 = 8 (forward from EX2)
+        0x00318213,  // ADDI x4, x3, 3     ; x4 = x3 + 3 = 11 (forward from EX2)
+        0x004202B3,  // ADD x5, x4, x4     ; x5 = x4 + x4 = 22 (forward x4 twice)
+        0x00502023,  // SW x5, 0(x0)       ; dmem[0] = 22
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 7; i += 2) {
+        uint32_t even = fwd_program[i];
+        uint32_t odd = (i + 1 < 7) ? fwd_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t fwd_result = (uint32_t)tb.axi_read(0x2000);
+    printf("  Forwarding result: %u (expected 22)\n", fwd_result);
+    if (fwd_result != 22) {
+        printf("  ERROR: Forwarding test failed!\n"); errors++;
+    } else { printf("  Forwarding test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 26: Load-use hazard (load followed by dependent instruction)
+    // =========================================================================
+    printf("\n=== Test 26: Load-use hazard ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    // Store value, then load and immediately use it
+    const uint32_t loaduse_program[] = {
+        0x00A00093,  // ADDI x1, x0, 10    ; x1 = 10
+        0x00102023,  // SW x1, 0(x0)       ; dmem[0] = 10
+        0x00002103,  // LW x2, 0(x0)       ; x2 = dmem[0] = 10
+        0x00210113,  // ADDI x2, x2, 2     ; x2 = x2 + 2 = 12 (use right after load)
+        0x00202223,  // SW x2, 4(x0)       ; dmem[4] = 12
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 6; i += 2) {
+        uint32_t even = loaduse_program[i];
+        uint32_t odd = (i + 1 < 6) ? loaduse_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t loaduse_result = (uint32_t)tb.axi_read(0x2004);
+    printf("  Load-use result: %u (expected 12)\n", loaduse_result);
+    if (loaduse_result != 12) {
+        printf("  ERROR: Load-use hazard test failed!\n"); errors++;
+    } else { printf("  Load-use hazard test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 27: Back-to-back branches
+    // =========================================================================
+    printf("\n=== Test 27: Back-to-back branches ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    // Multiple branches in sequence
+    const uint32_t branch_seq_program[] = {
+        0x00100093,  // ADDI x1, x0, 1     ; x1 = 1
+        0x00200113,  // ADDI x2, x0, 2     ; x2 = 2
+        0x00208463,  // BEQ x1, x2, +8     ; not taken (1 != 2)
+        0x00108093,  // ADDI x1, x1, 1     ; x1 = 2
+        0x00208463,  // BEQ x1, x2, +8     ; taken (2 == 2)
+        0x00108093,  // ADDI x1, x1, 1     ; SKIPPED
+        0x00108093,  // ADDI x1, x1, 1     ; x1 = 3
+        0x00102023,  // SW x1, 0(x0)       ; dmem[0] = 3
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 9; i += 2) {
+        uint32_t even = branch_seq_program[i];
+        uint32_t odd = (i + 1 < 9) ? branch_seq_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t branch_result = (uint32_t)tb.axi_read(0x2000);
+    printf("  Branch sequence result: %u (expected 3)\n", branch_result);
+    if (branch_result != 3) {
+        printf("  ERROR: Back-to-back branches test failed!\n"); errors++;
+    } else { printf("  Back-to-back branches test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 28: Multiple consecutive loads
+    // =========================================================================
+    printf("\n=== Test 28: Multiple consecutive loads ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    const uint32_t multi_load_program[] = {
+        0x00A00093,  // ADDI x1, x0, 10    ; x1 = 10
+        0x01400113,  // ADDI x2, x0, 20    ; x2 = 20
+        0x01E00193,  // ADDI x3, x0, 30    ; x3 = 30
+        0x00102023,  // SW x1, 0(x0)       ; dmem[0] = 10
+        0x00202223,  // SW x2, 4(x0)       ; dmem[4] = 20
+        0x00302423,  // SW x3, 8(x0)       ; dmem[8] = 30
+        0x00002203,  // LW x4, 0(x0)       ; x4 = 10
+        0x00402283,  // LW x5, 4(x0)       ; x5 = 20
+        0x00802303,  // LW x6, 8(x0)       ; x6 = 30
+        0x005203B3,  // ADD x7, x4, x5     ; x7 = 10 + 20 = 30
+        0x00638433,  // ADD x8, x7, x6     ; x8 = 30 + 30 = 60
+        0x00802623,  // SW x8, 12(x0)      ; dmem[12] = 60
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 13; i += 2) {
+        uint32_t even = multi_load_program[i];
+        uint32_t odd = (i + 1 < 13) ? multi_load_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t multi_load_result = (uint32_t)tb.axi_read(0x200C);
+    printf("  Multi-load result: %u (expected 60)\n", multi_load_result);
+    if (multi_load_result != 60) {
+        printf("  ERROR: Multiple loads test failed!\n"); errors++;
+    } else { printf("  Multiple loads test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 29: Store followed by load to same address
+    // =========================================================================
+    printf("\n=== Test 29: Store-load forwarding (same address) ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    const uint32_t store_load_program[] = {
+        0x0AB00093,  // ADDI x1, x0, 0xAB  ; x1 = 171
+        0x00102023,  // SW x1, 0(x0)       ; dmem[0] = 171
+        0x00002103,  // LW x2, 0(x0)       ; x2 = dmem[0] (should be 171)
+        0x00202223,  // SW x2, 4(x0)       ; dmem[4] = x2
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 5; i += 2) {
+        uint32_t even = store_load_program[i];
+        uint32_t odd = (i + 1 < 5) ? store_load_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 200; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t store_load_result = (uint32_t)tb.axi_read(0x2004);
+    printf("  Store-load result: %u (expected 171)\n", store_load_result);
+    if (store_load_result != 171) {
+        printf("  ERROR: Store-load test failed!\n"); errors++;
+    } else { printf("  Store-load test PASSED!\n"); }
+
+    // =========================================================================
+    // Test 30: Complex loop with all hazard types
+    // =========================================================================
+    printf("\n=== Test 30: Complex loop (sum 1 to 5) ===\n");
+
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    // Sum = 1 + 2 + 3 + 4 + 5 = 15
+    const uint32_t loop_program[] = {
+        0x00000093,  // ADDI x1, x0, 0     ; x1 = sum = 0
+        0x00100113,  // ADDI x2, x0, 1     ; x2 = i = 1
+        0x00600193,  // ADDI x3, x0, 6     ; x3 = limit = 6
+        // loop:
+        0x002080B3,  // ADD x1, x1, x2     ; sum += i
+        0x00110113,  // ADDI x2, x2, 1     ; i++
+        0xFE311CE3,  // BNE x2, x3, -8     ; if (i != 6) goto loop
+        0x00102023,  // SW x1, 0(x0)       ; dmem[0] = sum
+        0x00000063,  // BEQ x0, x0, 0
+    };
+    for (int i = 0; i < 8; i += 2) {
+        uint32_t even = loop_program[i];
+        uint32_t odd = (i + 1 < 8) ? loop_program[i + 1] : 0x00000013;
+        tb.axi_write(0x1000 + i * 4, ((uint64_t)odd << 32) | even);
+    }
+    tb.axi_write(0x0000, 0x01);
+    for (int i = 0; i < 300; i++) tb.tick();
+    tb.axi_write(0x0000, 0x00);
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    uint32_t loop_result = (uint32_t)tb.axi_read(0x2000);
+    printf("  Loop sum result: %u (expected 15, sum of 1..5)\n", loop_result);
+    if (loop_result != 15) {
+        printf("  ERROR: Loop test failed!\n"); errors++;
+    } else { printf("  Loop test PASSED!\n"); }
+
     printf("\n");
     if (errors == 0) {
         printf("=== ALL TESTS PASSED ===\n");
     } else {
         printf("=== FAILED: %d errors ===\n", errors);
     }
-    
+
     return errors;
 }
