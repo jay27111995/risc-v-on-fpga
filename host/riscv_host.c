@@ -371,7 +371,7 @@ int main(int argc, char *argv[]) {
         0x002091B3,  // SLL  x3, x1, x2     ; x3 = 8 << 2 = 32
         0x0020D233,  // SRL  x4, x1, x2     ; x4 = 8 >> 2 = 2
         0x80000293,  // ADDI x5, x0, -2048  ; x5 = 0xFFFFF800 (negative)
-        0x4020D333,  // SRA  x6, x5, x2     ; x6 = 0xFFFFF800 >>> 2 = 0xFFFFFE00
+        0x4022D333,  // SRA  x6, x5, x2     ; x6 = 0xFFFFF800 >>> 2 = 0xFFFFFE00
         0x00302C23,  // SW   x3, 24(x0)     ; dmem[24] = 32
         0x00402E23,  // SW   x4, 28(x0)     ; dmem[28] = 2
         0x02602023,  // SW   x6, 32(x0)     ; dmem[32] = 0xFFFFFE00
