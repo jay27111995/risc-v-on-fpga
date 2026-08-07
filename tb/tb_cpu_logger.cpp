@@ -1,4 +1,21 @@
-// Testbench for cpu_logger
+// ============================================================================
+// CPU Logger Testbench
+// ============================================================================
+//
+// Tests the cpu_logger debug module which captures CPU memory accesses:
+// - Instruction fetches (IMEM reads)
+// - Data loads (DMEM reads)
+// - Data stores (DMEM writes)
+//
+// The logger maintains a circular buffer of recent transactions for debugging.
+// Each entry contains: timestamp, address, data, and transaction type.
+//
+// Note: The NOP filter (imem_rdata != 0x00000013) creates a timing path from
+// RAM output through comparison logic. This causes a minor timing violation
+// at worst-case corners but doesn't affect functional operation.
+//
+// ============================================================================
+
 #include <cstdio>
 #include "Vcpu_logger.h"
 #include "verilated.h"

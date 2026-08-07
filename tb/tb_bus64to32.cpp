@@ -1,4 +1,18 @@
-// Testbench for bus64to32 adapter
+// ============================================================================
+// 64-to-32 Bus Adapter Testbench
+// ============================================================================
+//
+// Tests the bus64to32 module which converts 64-bit AXI transactions to
+// 32-bit SoC bus transactions.
+//
+// The PCIe AXI-Lite interface uses 64-bit data width, but the internal SoC
+// uses 32-bit. This adapter:
+// - Splits 64-bit writes into two 32-bit writes (low then high)
+// - Combines two 32-bit reads into one 64-bit read response
+// - Handles byte enables for partial writes
+//
+// ============================================================================
+
 #include <cstdio>
 #include <cstdlib>
 #include "Vbus64to32.h"
