@@ -1,5 +1,15 @@
 // RISC-V SoC Host Controller using VFIO
-// Loads program, runs CPU, reads results via PCIe BAR
+// ============================================================================
+// Loads program to IMEM, runs CPU, verifies results from DMEM via PCIe BAR.
+// Tests complete RV32I instruction set (37 instructions).
+//
+// BAR Memory Map:
+//   0x00000 - 0x000FF : Control registers (CTRL, STATUS, PC, CYCLES, etc.)
+//   0x20000 - 0x3FFFF : IMEM - 128KB instruction memory
+//   0x80000 - 0x87FFF : DMEM - 32KB data memory
+//
+// Usage: sudo ./riscv_host <pci_addr> <iommu_group>
+// ============================================================================
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,10 +25,9 @@
 #define BAR_CTRL      0x0000   // [0] RUN, [1] RESET
 #define BAR_STATUS    0x0008   // [0] RUNNING
 #define BAR_PC        0x0010   // Current PC
-#define BAR_IMEM      0x1000   // Instruction memory (4KB)
-#define BAR_DMEM      0x2000   // Data memory (8KB)
-#define BAR_SNIFFER   0x4000   // Bus sniffer logs
-#define BAR_CPULOG    0x5000   // CPU logger logs
+#define BAR_CYCLES    0x0020   // Performance counter
+#define BAR_IMEM      0x20000  // Instruction memory (128KB) - 0x20000-0x3FFFF
+#define BAR_DMEM      0x80000  // Data memory (32KB) - 0x80000-0x87FFF
 
 // Control bits
 #define CTRL_RUN      (1 << 0)

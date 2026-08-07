@@ -1,143 +1,111 @@
 # RISC-V on FPGA
 
-A minimal RISC-V CPU (RV32I subset) with PCIe BAR interface, targeting Intel Agilex 7 FPGA.
+A complete RV32I RISC-V CPU with PCIe BAR interface, targeting Intel Agilex 7 FPGA.
 
-## Current Status
+## Status: ✅ Working
 
-- **Working**: Basic 5-stage pipeline, PCIe interface, debug infrastructure
-- **Clock**: SoC runs at 125MHz (from PCIe clock divider)
-- **Target**: 500MHz (future optimization)
+All 37 RV32I base instructions implemented and verified on hardware.
+
+- **Target**: Intel Agilex 7 (AGF014)
+- **Clock**: 250 MHz (PCIe clock domain)
+- **Pipeline**: 5-stage (IF → ID → EX → MEM → WB)
+- **Memories**: 128KB IMEM, 32KB DMEM
 
 ## Architecture
 
-5-stage pipeline:
+```
+              PCIe Host (x86)
+                   │
+                   ▼
+          ┌────────────────┐
+          │   PCIe R-Tile  │  250 MHz
+          │   (AXI-Lite)   │
+          └───────┬────────┘
+                  │
+          ┌───────▼────────┐
+          │  axi_core_hw   │
+          │  (64→32 bridge)│
+          └───────┬────────┘
+                  │
+          ┌───────▼────────┐
+          │   riscv_soc    │
+          │  ┌──────────┐  │
+          │  │ RV32I CPU│  │
+          │  │ 5-stage  │  │
+          │  └────┬─────┘  │
+          │       │        │
+          │  ┌────┴────┐   │
+          │  │IMEM│DMEM│   │
+          │  │128K│32K │   │
+          │  └─────────┘   │
+          └────────────────┘
+```
+
+### Pipeline
 
 ```
 ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐   ┌─────┐
 │ IF  │──▶│ ID  │──▶│ EX  │──▶│ MEM │──▶│ WB  │
 └─────┘   └─────┘   └─────┘   └─────┘   └─────┘
-  │         │         │         │         │
-Fetch    Decode    Execute   Memory    Write
- IMEM    RegFile    ALU      DMEM     RegFile
+Fetch    Decode    Execute   Memory   Writeback
 ```
 
-```
-              PCIe (250MHz)
-                  │
-          ┌───────▼───────┐
-          │   PCIe IP     │
-          │  (AXI-Lite)   │
-          └───────┬───────┘
-                  │
-          ┌───────▼───────┐
-          │ axi_core_hw   │
-          │  + bus64to32  │
-          │  + bus_sniffer│
-          └───────┬───────┘
-                  │
-          ┌───────▼───────┐
-          │  riscv_soc    │
-          │  + cpu_logger │
-          │  + IMEM (4KB) │
-          │  + DMEM (8KB) │
-          │  + RV32I CPU  │
-          └───────────────┘
-```
+Features:
+- Full data forwarding (EX→EX, MEM→EX)
+- Load-use hazard detection with stall
+- Branch resolution in EX stage
 
 ## BAR Memory Map
 
 | Offset | Size | Description |
 |--------|------|-------------|
-| 0x0000 | 256B | Control registers |
-| 0x1000 | 4KB  | IMEM (instruction memory) |
-| 0x2000 | 8KB  | DMEM (data memory) |
-| 0x4000 | 4KB  | Bus sniffer logs |
-| 0x5000 | 4KB  | CPU logger logs |
+| 0x00000 | 256B | Control/status registers |
+| 0x20000 | 128KB | IMEM (instruction memory) |
+| 0x80000 | 32KB | DMEM (data memory) |
 
-### Control Registers (0x0xxx)
+### Control Registers
 
-| Offset | Name   | Description |
-|--------|--------|-------------|
-| 0x00   | CTRL   | [0] RUN, [1] RESET |
-| 0x08   | STATUS | [0] RUNNING |
-| 0x10   | PC     | Current program counter |
+| Offset | Name | Description |
+|--------|------|-------------|
+| 0x00 | CTRL | [0] RUN, [1] RESET |
+| 0x08 | STATUS | [0] RUNNING |
+| 0x10 | PC | Current program counter |
+| 0x20 | CYCLES | Cycle count (write to clear) |
 
-### Performance Counters (0x0xxx)
+## Supported Instructions
 
-| Offset | Name      | Description |
-|--------|-----------|-------------|
-| 0x20   | CYCLES    | Total cycles (write to clear all) |
-| 0x24   | INSTRS    | Instructions retired |
-| 0x28   | STALLS    | Stall cycles (load-use hazards) |
-| 0x2C   | BRANCHES  | Branch instructions |
-| 0x30   | BR_TAKEN  | Branches actually taken |
-| 0x34   | LOADS     | Load instructions |
-| 0x38   | STORES    | Store instructions |
+Complete RV32I base instruction set (37 instructions):
 
-### Bus Sniffer (0x4xxx) - Host transaction logger
-
-| Offset | Name      | Description |
-|--------|-----------|-------------|
-| 0x4000 | COUNT     | Total transactions logged |
-| 0x4004 | CYCLE     | Current cycle counter |
-| 0x4008 | CTRL      | [0] enable, [1] clear |
-| 0x4010 | ENTRY[0]  | Newest log entry (16 bytes) |
-| 0x4020 | ENTRY[1]  | Second newest, etc. |
-
-### CPU Logger (0x5xxx) - CPU memory access logger
-
-| Offset | Name      | Description |
-|--------|-----------|-------------|
-| 0x5000 | COUNT     | Total accesses logged |
-| 0x5004 | CYCLE     | Current cycle counter |
-| 0x5008 | CTRL      | [0] enable, [1] clear |
-| 0x5010 | ENTRY[0]  | Newest log entry (16 bytes) |
-
-## Supported Instructions (Currently)
-
-| Type   | Instructions |
-|--------|--------------|
-| R-type | ADD |
-| I-type | ADDI |
-| S-type | SW |
-| B-type | BEQ |
-
-**TODO**: Complete RV32I instruction set (~35 more instructions)
+| Type | Instructions |
+|------|--------------|
+| R-type | ADD, SUB, SLL, SLT, SLTU, XOR, SRL, SRA, OR, AND |
+| I-type | ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI |
+| I-type | LB, LH, LW, LBU, LHU, JALR |
+| S-type | SB, SH, SW |
+| B-type | BEQ, BNE, BLT, BGE, BLTU, BGEU |
+| U-type | LUI, AUIPC |
+| J-type | JAL |
 
 ## Files
 
 ```
 rtl/
-  axi_core_hw.sv   # AXI-Lite slave + bus64to32 + sniffer
-  bus64to32.sv     # 64-bit to 32-bit bus adapter
-  bus_sniffer.sv   # Host transaction logger
-  cpu_logger.sv    # CPU memory access logger
-  riscv_soc.sv     # SoC wrapper with CPU + memories
-  alu.sv           # Arithmetic Logic Unit
-  decoder.sv       # Instruction decoder
-  regfile.sv       # 32x32-bit register file
-
-tb/
-  tb_axi_core.cpp  # Integration testbench
+  riscv_soc.sv     # Top-level SoC (CPU + memories + control)
+  axi_core_hw.sv   # AXI-Lite slave wrapper
+  cpu_logger.sv    # Debug: CPU memory access logger
 
 host/
-  riscv_host.c     # VFIO host program
-  build.sh         # Build script
+  riscv_host.c     # VFIO test program (15 instruction tests)
+  Makefile         # Build script
+
+build/
+  pcie_ed.qpf      # Quartus project
+  *.sof            # FPGA bitstream (after build)
 ```
 
-## Build & Test
+## Build
 
-### Simulation
-
-```bash
-cd tb
-verilator --cc --top-module axi_core_hw -I../rtl ../rtl/*.sv \
-          --exe tb_axi_core.cpp -CFLAGS "-std=c++17" -Wno-CASEINCOMPLETE
-make -C obj_dir -f Vaxi_core_hw.mk
-./obj_dir/Vaxi_core_hw
-```
-
-### FPGA Build
+### FPGA Bitstream
 
 Requires Quartus 25.x with Agilex 7 support:
 
@@ -145,51 +113,83 @@ Requires Quartus 25.x with Agilex 7 support:
 ./build_fpga.sh
 ```
 
+Output: `build/riscv-soc-revid-*.sof`
+
 ### Host Program
 
 ```bash
-cd host && ./build.sh
+cd host && make
+```
 
-# Setup VFIO
-PCI=0000:b1:00.0
+## Run on FPGA
+
+### 1. Program FPGA
+
+```bash
+quartus_pgm -c 1 -m jtag -o "p;build/riscv-soc-*.sof"
+```
+
+### 2. Setup VFIO
+
+```bash
+PCI=0000:b1:00.0  # Find with lspci
+GROUP=$(basename $(readlink /sys/bus/pci/devices/$PCI/iommu_group))
+
 echo $PCI | sudo tee /sys/bus/pci/devices/$PCI/driver/unbind
 echo vfio-pci | sudo tee /sys/bus/pci/devices/$PCI/driver_override
 echo $PCI | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+```
 
-# Run test (12 = IOMMU group)
-sudo ./riscv_host $PCI 12
+### 3. Run Tests
+
+```bash
+sudo ./host/riscv_host $PCI $GROUP
 ```
 
 ## Test Output
 
 ```
-=== Bus Sniffer Log (host transactions) ===
-Total transactions: 8, Current cycle: 87021052
-  [7] cycle=19490 WR addr=0x0000 data=0x00000002   ← CPU Reset
-  [6] cycle=36480 WR addr=0x1000 data=0x00500093   ← ADDI x1, x0, 5
-  [5] cycle=36481 WR addr=0x1004 data=0x00300113   ← ADDI x2, x0, 3
-  [4] cycle=36644 WR addr=0x1008 data=0x002081B3   ← ADD x3, x1, x2
-  [3] cycle=36645 WR addr=0x100C data=0x00302023   ← SW x3, 0(x0)
-  [2] cycle=36809 WR addr=0x1010 data=0x00000063   ← BEQ loop
-  ...
+RISC-V SoC Test
+===============
+PCI: 0000:b1:00.0, IOMMU group: 12
 
-=== CPU Logger (CPU memory accesses) ===
-Total accesses: 6, Current cycle: 86515210
-  [5] cycle=17066 IFETCH addr=0x00000000 data=0x00500093  ← Fetch ADDI x1
-  [4] cycle=17067 IFETCH addr=0x00000004 data=0x00300113  ← Fetch ADDI x2
-  [3] cycle=17068 IFETCH addr=0x00000008 data=0x002081B3  ← Fetch ADD x3
-  [2] cycle=17069 IFETCH addr=0x0000000C data=0x00302023  ← Fetch SW
-  [1] cycle=17070 IFETCH addr=0x00000010 data=0x00000063  ← Fetch BEQ
-  [0] cycle=17072 DSTORE addr=0x00000000 data=0x00000008  ← Store 8 to DMEM
+BAR0 mapped at 0x7aa00dc00000, size 8388608 bytes
 
-DMEM[0] = 8 (expected 8)
-=== TEST PASSED ===
+=== Test 1: Basic ALU ===
+Loading program...
+Running CPU...
+  DMEM[0] = 8 (expected 8)
+  Test 1: PASSED
+
+=== Test 2: BNE (count down) ===
+  DMEM[4] = 0 (expected 0)
+  Test 2: PASSED
+
+... (13 more tests) ...
+
+=== Test Summary ===
+  Passed: 15/15
+
+=== ALL TESTS PASSED ===
 ```
+
+## Timing
+
+Current build has minor timing violation (-0.305 ns) on cpu_logger debug path at worst-case corner. Does not affect functional operation.
+
+| Clock Domain | Target | Achieved | Status |
+|--------------|--------|----------|--------|
+| PCIe pld_clkout | 250 MHz | 250 MHz | ⚠️ -0.3ns slack (debug path) |
+| PCIe pld_clkout_slow | 125 MHz | 233 MHz | ✅ |
 
 ## Next Steps
 
-1. Complete RV32I instruction set
-2. Add CSRs and interrupts
-3. Increase clock speed toward 500MHz
-4. Add cache controller
-5. DDR memory integration
+- [ ] Add CSRs (MTVEC, MEPC, MCAUSE) for interrupts
+- [ ] Implement M extension (MUL, DIV)
+- [ ] Boot Zephyr RTOS
+- [ ] Add instruction cache
+- [ ] DDR memory controller
+
+## License
+
+MIT
