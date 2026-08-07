@@ -25,7 +25,8 @@
 //
 // Control Registers (0x0xxx):
 //   0x00  CTRL    [0] RUN, [1] RESET           (addr[7:2] == 0)
-//   0x08  STATUS  [0] RUNNING                  (addr[7:2] == 2)
+//   0x08  STATUS  [0] RUNNING, [1] HALTED      (addr[7:2] == 2)
+//                 HALTED is set when EBREAK executes, cleared on RESET
 //   0x10  PC      Current program counter      (addr[7:2] == 4)
 //   0x20  CYCLES  Performance counter          (addr[7:2] == 8)
 //   0x24  INSTRS  Instructions retired         (addr[7:2] == 9)
@@ -36,10 +37,14 @@
 //   0x38  STORES  Store count                  (addr[7:2] == 14)
 //
 // CPU Logger Registers (0x5xxx):
-//   0x5000  LOG_COUNT   Total transactions logged
-//   0x5004  LOG_CYCLE   Current cycle count
+//   0x5000  LOG_COUNT   Total transactions logged (RO)
+//   0x5004  LOG_CYCLE   Current cycle count (RO)
+//   0x5008  LOG_CTRL    Control: [0]=enable (RW), [1]=clear (W), [2]=log_imem (RW)
+//                       Default: enable=1, log_imem=0 (DMEM only)
 //   0x5010  ENTRY[0]    Newest log entry (3 words: data, addr, timestamp|type)
 //   0x5020  ENTRY[1]    Second newest, etc.
+//
+// Log entry types: 00=IFETCH, 01=DLOAD, 10=DSTORE
 //
 // ============================================================================
 
@@ -61,25 +66,39 @@ module riscv_soc (
 
     logic        ctrl_run;
     logic        ctrl_reset;
+    logic        cpu_halted;      // Set when EBREAK executed
     logic [31:0] cpu_pc;
 
     logic cpu_rst;
     logic cpu_running;
 
     assign cpu_rst = ~rst_n | ctrl_reset;
-    assign cpu_running = ctrl_run & ~ctrl_reset;
+    assign cpu_running = ctrl_run & ~ctrl_reset & ~cpu_halted;
+
+    // Forward declaration of EBREAK signal from WB stage
+    logic wb_ebreak;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (~rst_n) begin
             ctrl_run <= 1'b0;
             ctrl_reset <= 1'b0;
+            cpu_halted <= 1'b0;
         end else begin
-            if (ctrl_reset)
+            if (ctrl_reset) begin
                 ctrl_reset <= 1'b0;
+                cpu_halted <= 1'b0;  // Clear halted on reset
+            end
+            
+            // EBREAK halts the CPU
+            if (wb_ebreak && cpu_running)
+                cpu_halted <= 1'b1;
 
             if (wen && addr[19:12] == 8'h00 && addr[7:2] == 6'd0) begin
                 ctrl_run   <= wdata[0];
                 ctrl_reset <= wdata[1];
+                // Writing to CTRL clears halted state (allows restart)
+                if (wdata[1])  // Reset also clears halted
+                    cpu_halted <= 1'b0;
             end
         end
     end
@@ -272,7 +291,7 @@ module riscv_soc (
             8'h00: begin  // Control registers
                 case (addr[7:2])
                     6'd0:  rdata = {30'b0, ctrl_reset, ctrl_run};  // 0x00 CTRL
-                    6'd2:  rdata = {31'b0, cpu_running};           // 0x08 STATUS
+                    6'd2:  rdata = {30'b0, cpu_halted, cpu_running};  // 0x08 STATUS [0]=running, [1]=halted
                     6'd4:  rdata = cpu_pc;                         // 0x10 PC
                     6'd8:  rdata = perf_cycles;                    // 0x20 CYCLES
                     6'd9:  rdata = perf_instrs;                    // 0x24 INSTRS
@@ -387,6 +406,7 @@ module riscv_soc (
     logic [2:0]  id_branch_op;
     logic        id_jump, id_jump_reg;
     logic        id_lui, id_auipc;
+    logic        id_ebreak;
     logic [2:0]  id_mem_op;
 
     decoder decoder_inst (
@@ -406,7 +426,8 @@ module riscv_soc (
         .jump      (id_jump),
         .jump_reg  (id_jump_reg),
         .lui       (id_lui),
-        .auipc     (id_auipc)
+        .auipc     (id_auipc),
+        .ebreak    (id_ebreak)
     );
 
     logic [31:0] id_rs1_data, id_rs2_data;
@@ -434,6 +455,7 @@ module riscv_soc (
     logic [2:0]  ex1_branch_op;
     logic        ex1_jump, ex1_jump_reg;
     logic        ex1_lui, ex1_auipc;
+    logic        ex1_ebreak;
     logic [2:0]  ex1_mem_op;
 
     always_ff @(posedge clk) begin
@@ -446,6 +468,7 @@ module riscv_soc (
             ex1_jump      <= 1'b0;
             ex1_lui       <= 1'b0;
             ex1_auipc     <= 1'b0;
+            ex1_ebreak    <= 1'b0;
         end else if (cpu_running) begin
             ex1_pc        <= id_pc;
             ex1_rs1_data  <= id_rs1_data;
@@ -466,6 +489,7 @@ module riscv_soc (
             ex1_jump_reg  <= id_jump_reg;
             ex1_lui       <= id_lui       && id_valid;
             ex1_auipc     <= id_auipc     && id_valid;
+            ex1_ebreak    <= id_ebreak    && id_valid;
             ex1_valid     <= id_valid;
         end
     end
@@ -522,6 +546,7 @@ module riscv_soc (
     logic [2:0]  ex2_branch_op;
     logic        ex2_jump, ex2_jump_reg;
     logic        ex2_lui, ex2_auipc;
+    logic        ex2_ebreak;
     logic [2:0]  ex2_mem_op;
 
     always_ff @(posedge clk) begin
@@ -534,6 +559,7 @@ module riscv_soc (
             ex2_jump      <= 1'b0;
             ex2_lui       <= 1'b0;
             ex2_auipc     <= 1'b0;
+            ex2_ebreak    <= 1'b0;
         end else if (cpu_running && !hazard_load_data) begin
             ex2_pc        <= ex1_pc;
             ex2_alu_a     <= ex1_fwd_rs1;
@@ -552,6 +578,7 @@ module riscv_soc (
             ex2_jump_reg  <= ex1_jump_reg;
             ex2_lui       <= ex1_lui;
             ex2_auipc     <= ex1_auipc;
+            ex2_ebreak    <= ex1_ebreak;
             ex2_valid     <= ex1_valid;
         end
     end
@@ -593,6 +620,7 @@ module riscv_soc (
     logic [31:0] mem_imm;
     logic [2:0]  mem_branch_op;
     logic        mem_jump, mem_jump_reg;
+    logic        mem_ebreak;
     logic [2:0]  mem_mem_op;
 
     always_ff @(posedge clk) begin
@@ -603,6 +631,7 @@ module riscv_soc (
             mem_mem_write <= 1'b0;
             mem_branch    <= 1'b0;
             mem_jump      <= 1'b0;
+            mem_ebreak    <= 1'b0;
         end else if (cpu_running && !hazard_load_data) begin
             // Normal advance from EX2 to MEM
             mem_alu_result <= ex2_result;
@@ -621,6 +650,7 @@ module riscv_soc (
             mem_alu_ltu    <= ex2_alu_ltu;
             mem_pc         <= ex2_pc;
             mem_imm        <= ex2_imm;
+            mem_ebreak     <= ex2_ebreak;
             mem_valid      <= ex2_valid;
         end
         // When hazard_load_data: MEM stage holds, waiting for DMEM data
@@ -724,6 +754,7 @@ module riscv_soc (
             wb_reg_write <= 1'b0;
             wb_mem_read  <= 1'b0;
             wb_jump      <= 1'b0;
+            wb_ebreak    <= 1'b0;
         end else if (cpu_running && !hazard_load_data) begin
             wb_alu_result    <= mem_alu_result;
             wb_load_data_raw <= mem_load_data_raw;
@@ -734,6 +765,7 @@ module riscv_soc (
             wb_reg_write     <= mem_reg_write;
             wb_mem_read      <= mem_mem_read;
             wb_jump          <= mem_jump;
+            wb_ebreak        <= mem_ebreak;
             wb_valid         <= mem_valid;
         end
     end
@@ -799,13 +831,16 @@ module riscv_soc (
     //   0x5020 = entry[1] bits[31:0],  etc.
 
     // CPU logger control register
+    // Control bits: [0]=enable, [1]=clear (auto-clears), [2]=log_imem
     logic cpulog_enable;
+    logic cpulog_log_imem;    // When 0, only log DMEM accesses (default)
     logic cpulog_clear_req;   // Request from host write
     logic cpulog_clear;       // Actual clear signal (delayed by 1 cycle)
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (~rst_n) begin
-            cpulog_enable <= 1'b1;  // Enabled by default
+            cpulog_enable <= 1'b1;    // Enabled by default
+            cpulog_log_imem <= 1'b0;  // DMEM-only by default (avoids filling buffer with fetches)
             cpulog_clear_req <= 1'b0;
             cpulog_clear <= 1'b0;
         end else begin
@@ -816,6 +851,7 @@ module riscv_soc (
             if (wen && addr[19:12] == 8'h50 && addr[7:0] == 8'h08) begin
                 cpulog_enable <= wdata[0];
                 cpulog_clear_req <= wdata[1];
+                cpulog_log_imem <= wdata[2];
             end
         end
     end
@@ -834,6 +870,7 @@ module riscv_soc (
         // Control
         .log_enable (cpulog_enable),
         .log_clear  (cpulog_clear),
+        .log_imem   (cpulog_log_imem),
 
         // IMEM fetch
         .imem_addr  (if_pc),
@@ -858,15 +895,15 @@ module riscv_soc (
     logic [31:0] cpu_logger_rdata;
     always_comb begin
         if (addr[7:4] == 4'h0) begin
-            // Control registers
+            // Control registers at 0x5000-0x500F
             case (addr[3:2])
-                2'd0: cpu_logger_rdata = cpu_log_count;
-                2'd1: cpu_logger_rdata = cpu_log_cycle;
-                2'd2: cpu_logger_rdata = {30'b0, 1'b0, cpulog_enable};  // control
+                2'd0: cpu_logger_rdata = cpu_log_count;                                   // 0x5000
+                2'd1: cpu_logger_rdata = cpu_log_cycle;                                   // 0x5004
+                2'd2: cpu_logger_rdata = {29'b0, cpulog_log_imem, 1'b0, cpulog_enable};   // 0x5008
                 default: cpu_logger_rdata = 32'h0;
             endcase
         end else begin
-            // Log entries
+            // Log entries at 0x5010, 0x5020, etc.
             case (addr[3:2])
                 2'd0: cpu_logger_rdata = cpu_log_entry[31:0];
                 2'd1: cpu_logger_rdata = cpu_log_entry[63:32];

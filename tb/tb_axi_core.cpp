@@ -1485,6 +1485,58 @@ int main(int argc, char** argv) {
         printf("  ERROR: Loop test failed!\n"); errors++;
     } else { printf("  Loop test PASSED!\n"); }
 
+    // -------------------------------------------------------------------------
+    // Test 31: EBREAK halts CPU
+    // -------------------------------------------------------------------------
+    printf("\n=== Test 31: EBREAK halts CPU ===\n");
+    
+    // Reset CPU
+    tb.axi_write(0x00, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+    
+    // Clear IMEM
+    for (int i = 0; i < 16; i++) {
+        tb.axi_write(0x20000 + i * 4, 0x00000013);  // NOP
+    }
+    
+    // Program: store a value, then EBREAK
+    tb.axi_write(0x20000 + 0,  0x00A00093);  // ADDI x1, x0, 10     ; x1 = 10
+    tb.axi_write(0x20000 + 4,  0x00102023);  // SW   x1, 0(x0)      ; dmem[0] = 10
+    tb.axi_write(0x20000 + 8,  0x00100073);  // EBREAK              ; halt
+    tb.axi_write(0x20000 + 12, 0x01400093);  // ADDI x1, x0, 20     ; x1 = 20 (should NOT execute)
+    tb.axi_write(0x20000 + 16, 0x00102023);  // SW   x1, 0(x0)      ; dmem[0] = 20 (should NOT execute)
+    
+    // Clear DMEM
+    tb.axi_write(0x80000, 0);
+    
+    // Start CPU
+    tb.axi_write(0x00, 0x01);  // RUN
+    
+    // Run long enough for EBREAK to propagate through pipeline
+    for (int i = 0; i < 50; i++) tb.tick();
+    
+    // Check STATUS register - should show HALTED
+    uint32_t ebreak_status = (uint32_t)tb.axi_read(0x08);
+    printf("  STATUS: 0x%02X (running=%d, halted=%d)\n", ebreak_status, ebreak_status & 1, (ebreak_status >> 1) & 1);
+    
+    // CPU should be halted (not running, halted flag set)
+    if ((ebreak_status & 1) != 0) {
+        printf("  ERROR: CPU should not be running after EBREAK!\n"); errors++;
+    } else if ((ebreak_status & 2) == 0) {
+        printf("  ERROR: HALTED flag should be set!\n"); errors++;
+    } else {
+        printf("  PASS: CPU halted correctly\n");
+    }
+    
+    // DMEM[0] should be 10 (not 20, since instructions after EBREAK shouldn't execute)
+    uint32_t ebreak_result = (uint32_t)tb.axi_read(0x80000);
+    printf("  DMEM[0]: %u (expected 10)\n", ebreak_result);
+    if (ebreak_result != 10) {
+        printf("  ERROR: EBREAK test failed - instructions after EBREAK executed!\n"); errors++;
+    } else {
+        printf("  EBREAK test PASSED!\n");
+    }
+
     printf("\n");
     if (errors == 0) {
         printf("=== ALL TESTS PASSED ===\n");
