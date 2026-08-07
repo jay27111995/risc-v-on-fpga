@@ -46,7 +46,8 @@ module decoder (
     output logic        jump,        // JAL or JALR instruction?
     output logic        jump_reg,    // JALR (jump to register+offset)?
     output logic        lui,         // LUI instruction (rd = imm)?
-    output logic        auipc        // AUIPC instruction (rd = PC + imm)?
+    output logic        auipc,       // AUIPC instruction (rd = PC + imm)?
+    output logic        ebreak       // EBREAK instruction (halt CPU)?
 );
 
 // Extract fixed fields (same position for all formats)
@@ -73,6 +74,7 @@ localparam OP_JAL    = 7'b1101111;  // JAL
 localparam OP_JALR   = 7'b1100111;  // JALR
 localparam OP_LUI    = 7'b0110111;  // LUI
 localparam OP_AUIPC  = 7'b0010111;  // AUIPC
+localparam OP_SYSTEM = 7'b1110011;  // ECALL, EBREAK
 
 // Decode logic
 always_comb begin
@@ -90,6 +92,7 @@ always_comb begin
     jump_reg = 0;
     lui = 0;
     auipc = 0;
+    ebreak = 0;
     
     case (opcode)
         OP_RTYPE: begin  // R-type: ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU
@@ -190,6 +193,15 @@ always_comb begin
             auipc = 1;
             // U-type immediate: upper 20 bits, lower 12 bits are 0
             imm = {instr[31:12], 12'b0};
+        end
+        
+        OP_SYSTEM: begin  // ECALL, EBREAK
+            // EBREAK: instr = 0x00100073 (imm[11:0] = 0x001)
+            // ECALL:  instr = 0x00000073 (imm[11:0] = 0x000)
+            if (instr[20]) begin  // imm[0] = 1 means EBREAK
+                ebreak = 1;
+            end
+            // ECALL not implemented - treated as NOP
         end
         
         default: begin

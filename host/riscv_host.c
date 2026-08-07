@@ -40,10 +40,16 @@
 #define SNIFF_ENTRY0  0x0010   // Entry[0] (128 bits = 4 words)
 
 // CPU Logger registers (at BAR_CPULOG)
-#define CPULOG_COUNT  0x0000   // Total transactions logged
-#define CPULOG_CYCLE  0x0004   // Current cycle counter
-#define CPULOG_CTRL   0x0008   // [0]=enable, [1]=clear
+#define CPULOG_COUNT  0x0000   // Total transactions logged (RO)
+#define CPULOG_CYCLE  0x0004   // Current cycle counter (RO)
+#define CPULOG_CTRL   0x0008   // [0]=enable, [1]=clear, [2]=log_imem, [3]=ebreak_hit(RO)
 #define CPULOG_ENTRY0 0x0010   // Entry[0] (96 bits = 3 words)
+
+// Log entry types
+#define LOG_TYPE_IFETCH  0
+#define LOG_TYPE_DLOAD   1
+#define LOG_TYPE_DSTORE  2
+#define LOG_TYPE_EBREAK  3
 
 // Control bits
 #define CTRL_RUN      (1 << 0)
@@ -721,11 +727,94 @@ int main(int argc, char *argv[]) {
     printf("  Bus Sniffer: %s\n", sniffer_pass ? "PASSED" : "FAILED");
 
     // =========================================================================
-    // CPU Logger Test - SKIPPED (needs debugging)
+    // CPU Logger Test
     // =========================================================================
+    // Tests the CPU memory access logger which captures load/store operations.
+    // With log_imem=0 (default), only DMEM accesses are logged, avoiding the
+    // buffer filling with instruction fetches.
     printf("\n=== CPU Logger Test ===\n");
-    printf("  SKIPPED - NOP filter issue, needs debugging\n");
-    int cpulog_pass = 1;  // Don't fail the overall test for now
+    int cpulog_pass = 1;
+    
+    // Reset CPU and clear logger
+    cpu_reset();
+    write32(BAR_CPULOG + CPULOG_CTRL, 0x3);  // Clear log (bit 1) + enable (bit 0)
+    usleep(1000);
+    write32(BAR_CPULOG + CPULOG_CTRL, 0x1);  // Enable only (log_imem=0, DMEM only)
+    
+    // Clear IMEM
+    for (int i = 0; i < 64; i++) {
+        write_imem(i, 0x00000013);  // NOP
+    }
+    
+    // Load a simple program that does stores and loads
+    // This should generate DMEM transactions that the logger will capture
+    uint32_t cpulog_prog[] = {
+        0x00A00093,  // ADDI x1, x0, 10     ; x1 = 10
+        0x00102023,  // SW   x1, 0(x0)      ; dmem[0] = 10   <- DSTORE
+        0x00002103,  // LW   x2, 0(x0)      ; x2 = dmem[0]   <- DLOAD
+        0x00210133,  // ADD  x2, x2, x2     ; x2 = x2 + x2 = 20
+        0x00202223,  // SW   x2, 4(x0)      ; dmem[4] = 20   <- DSTORE
+        0x00402183,  // LW   x3, 4(x0)      ; x3 = dmem[4]   <- DLOAD
+        0xDEA00213,  // ADDI x4, x0, 0xDEA  ; marker
+        0x00402423,  // SW   x4, 8(x0)      ; dmem[8] = marker <- DSTORE
+        0x00000013,  // NOP
+        0x00000013,  // NOP
+        0x00100073,  // EBREAK (halt)
+    };
+    
+    for (size_t i = 0; i < sizeof(cpulog_prog) / sizeof(cpulog_prog[0]); i++) {
+        write_imem(i, cpulog_prog[i]);
+    }
+    
+    // Run for a short time
+    cpu_run();
+    usleep(10);  // Very short - we just need a few instructions
+    cpu_stop();
+    
+    // Check log count - should have captured the DMEM transactions
+    uint32_t cpulog_count = read32(BAR_CPULOG + CPULOG_COUNT);
+    printf("  Log count: %u\n", cpulog_count);
+    
+    if (cpulog_count < 3) {
+        printf("  ERROR: Expected at least 3 DMEM transactions, got %u\n", cpulog_count);
+        cpulog_pass = 0;
+    } else {
+        printf("  Reading log entries (newest first):\n");
+        // Read up to 8 entries
+        int entries_to_read = (cpulog_count < 8) ? cpulog_count : 8;
+        for (int i = 0; i < entries_to_read; i++) {
+            uint32_t entry_base = BAR_CPULOG + CPULOG_ENTRY0 + (i * 0x10);
+            uint32_t type_time = read32(entry_base + 0);
+            uint32_t addr = read32(entry_base + 4);
+            uint32_t data = read32(entry_base + 8);
+            
+            uint8_t type = type_time & 0x3;
+            uint16_t timestamp = (type_time >> 16) & 0xFFFF;
+            
+            const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
+            printf("    [%d] cycle=%4u %s addr=0x%08X data=0x%08X\n",
+                   i, timestamp, type_names[type], addr, data);
+        }
+        
+        // With log_imem=0, we should only see DSTORE (type=2) and DLOAD (type=1)
+        // Check that we captured at least the expected transactions
+        int found_stores = 0, found_loads = 0;
+        for (int i = 0; i < entries_to_read; i++) {
+            uint32_t entry_base = BAR_CPULOG + CPULOG_ENTRY0 + (i * 0x10);
+            uint32_t type_time = read32(entry_base + 0);
+            uint8_t type = type_time & 0x3;
+            if (type == 1) found_loads++;
+            if (type == 2) found_stores++;
+        }
+        
+        printf("  Found %d stores, %d loads\n", found_stores, found_loads);
+        if (found_stores >= 2 && found_loads >= 1) {
+            printf("  CPU Logger: PASSED\n");
+        } else {
+            printf("  ERROR: Expected at least 2 stores and 1 load\n");
+            cpulog_pass = 0;
+        }
+    }
 
     // =========================================================================
     // Final Summary
