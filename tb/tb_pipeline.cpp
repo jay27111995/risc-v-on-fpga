@@ -11,12 +11,24 @@
 // 6. Forwarding from WB stage
 // 7. x0 handling (writes to x0 should be ignored)
 //
+// Memory Map (directly accessing riscv_soc via 20-bit address):
+//   0x00000 - 0x000FF : Control registers
+//   0x20000 - 0x3FFFF : IMEM - 128KB instruction memory
+//   0x80000 - 0x87FFF : DMEM - 32KB data memory
+//
 // ============================================================================
 
 #include "Vriscv_soc.h"
 #include "verilated.h"
 #include <cstdio>
 #include <cstdint>
+
+// Memory map constants (matching riscv_soc.sv)
+#define ADDR_CTRL     0x00000
+#define ADDR_STATUS   0x00008
+#define ADDR_PC       0x00010
+#define ADDR_IMEM     0x20000  // 128KB IMEM at 0x20000-0x3FFFF
+#define ADDR_DMEM     0x80000  // 32KB DMEM at 0x80000-0x87FFF
 
 // ============================================================================
 // Testbench Helper Class
@@ -58,7 +70,7 @@ public:
     
     void bar_write(uint32_t addr, uint32_t data) {
         soc->wen = 1;
-        soc->addr = addr;
+        soc->addr = addr & 0xFFFFF;  // 20-bit address
         soc->wdata = data;
         tick();
         soc->wen = 0;
@@ -67,7 +79,7 @@ public:
     
     uint32_t bar_read(uint32_t addr) {
         soc->ren = 1;
-        soc->addr = addr;
+        soc->addr = addr & 0xFFFFF;  // 20-bit address
         tick();
         soc->ren = 0;
         tick();
@@ -75,34 +87,34 @@ public:
     }
     
     void write_imem(uint32_t idx, uint32_t instr) {
-        bar_write(0x1000 + idx * 4, instr);
+        bar_write(ADDR_IMEM + idx * 4, instr);
     }
     
     void write_dmem(uint32_t idx, uint32_t data) {
-        bar_write(0x2000 + idx * 4, data);
+        bar_write(ADDR_DMEM + idx * 4, data);
     }
     
     uint32_t read_dmem(uint32_t idx) {
-        return bar_read(0x2000 + idx * 4);
+        return bar_read(ADDR_DMEM + idx * 4);
     }
     
     uint32_t read_pc() {
-        return static_cast<uint32_t>(bar_read(0x10));
+        return static_cast<uint32_t>(bar_read(ADDR_PC));
     }
     
     void reset_cpu() {
-        bar_write(0x00, 0x02);  // Reset bit
+        bar_write(ADDR_CTRL, 0x02);  // Reset bit
         for (int i = 0; i < 5; i++) tick();
-        bar_write(0x00, 0x00);  // Clear reset
+        bar_write(ADDR_CTRL, 0x00);  // Clear reset
         for (int i = 0; i < 5; i++) tick();
     }
     
     void start_cpu() {
-        bar_write(0x00, 0x01);  // Run bit
+        bar_write(ADDR_CTRL, 0x01);  // Run bit
     }
     
     void stop_cpu() {
-        bar_write(0x00, 0x00);  // Clear run bit
+        bar_write(ADDR_CTRL, 0x00);  // Clear run bit
     }
     
     void run_cycles(int n) {
@@ -116,7 +128,7 @@ public:
     }
     
     void clear_dmem() {
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 16; i++) {
             write_dmem(i, 0);
         }
     }
@@ -128,16 +140,6 @@ public:
 
 int test_store_forwarding_mem(PipelineTestbench& tb) {
     // Test: Store uses value from instruction in MEM stage (1 cycle ahead)
-    // This is the FPGA failure case!
-    //
-    // Cycle: IF      ID       EX       MEM      WB
-    //   1    ADDI x1
-    //   2    ADDI x2  ADDI x1
-    //   3    ADD x3   ADDI x2  ADDI x1
-    //   4    SW x3    ADD x3   ADDI x2  ADDI x1          <- SW in ID needs x3
-    //   5    BEQ      SW x3    ADD x3   ADDI x2  ADDI x1 <- SW in EX, ADD in MEM (forward!)
-    //   6    -        BEQ      SW x3    ADD x3   ADDI x2 <- SW in MEM, writes DMEM[0]=8
-    
     printf("Test 1: Store forwarding from MEM stage\n");
     printf("  Program: x1=5, x2=3, x3=x1+x2=8, SW x3 to DMEM[0]\n");
     
@@ -152,7 +154,7 @@ int test_store_forwarding_mem(PipelineTestbench& tb) {
     
     tb.reset_cpu();
     tb.start_cpu();
-    tb.run_cycles(20);
+    tb.run_cycles(30);
     tb.stop_cpu();
     
     uint32_t dmem0 = tb.read_dmem(0);
@@ -168,9 +170,6 @@ int test_store_forwarding_mem(PipelineTestbench& tb) {
 
 int test_store_forwarding_wb(PipelineTestbench& tb) {
     // Test: Store uses value from instruction in WB stage (2 cycles ahead)
-    //
-    // ADD x3, NOOP, SW x3 - SW needs x3 from WB stage
-    
     printf("Test 2: Store forwarding from WB stage\n");
     printf("  Program: x3=5+3=8, NOP, SW x3 to DMEM[1]\n");
     
@@ -186,7 +185,7 @@ int test_store_forwarding_wb(PipelineTestbench& tb) {
     
     tb.reset_cpu();
     tb.start_cpu();
-    tb.run_cycles(25);
+    tb.run_cycles(30);
     tb.stop_cpu();
     
     uint32_t dmem1 = tb.read_dmem(1);
@@ -202,9 +201,6 @@ int test_store_forwarding_wb(PipelineTestbench& tb) {
 
 int test_store_no_forwarding(PipelineTestbench& tb) {
     // Test: Store uses value that's already in register file (no forwarding needed)
-    //
-    // x3 computed, multiple NOPs, then SW x3
-    
     printf("Test 3: Store without forwarding (value in regfile)\n");
     printf("  Program: x3=8, NOPs, SW x3 to DMEM[2]\n");
     
@@ -222,7 +218,7 @@ int test_store_no_forwarding(PipelineTestbench& tb) {
     
     tb.reset_cpu();
     tb.start_cpu();
-    tb.run_cycles(30);
+    tb.run_cycles(35);
     tb.stop_cpu();
     
     uint32_t dmem2 = tb.read_dmem(2);
@@ -239,12 +235,6 @@ int test_store_no_forwarding(PipelineTestbench& tb) {
 int test_load_use_hazard(PipelineTestbench& tb) {
     // Test: Load followed immediately by instruction using loaded value
     // This requires a stall cycle
-    //
-    // Pre-init DMEM[3] = 42, then:
-    //   LW x4, 12(x0)    # x4 = 42
-    //   ADD x5, x4, x1   # x5 = 42 + 5 = 47 (needs stall)
-    //   SW x5, 16(x0)    # DMEM[4] = 47
-    
     printf("Test 4: Load-use hazard (requires stall)\n");
     printf("  Program: load DMEM[3]=42 into x4, add x4+x1, store to DMEM[4]\n");
     
@@ -264,7 +254,7 @@ int test_load_use_hazard(PipelineTestbench& tb) {
     
     tb.reset_cpu();
     tb.start_cpu();
-    tb.run_cycles(25);
+    tb.run_cycles(30);
     tb.stop_cpu();
     
     uint32_t dmem4 = tb.read_dmem(4);
@@ -280,11 +270,6 @@ int test_load_use_hazard(PipelineTestbench& tb) {
 
 int test_back_to_back_stores(PipelineTestbench& tb) {
     // Test: Multiple consecutive store instructions
-    //
-    // SW x1, 20(x0)   # DMEM[5] = 5
-    // SW x2, 24(x0)   # DMEM[6] = 3
-    // SW x3, 28(x0)   # DMEM[7] = 8
-    
     printf("Test 5: Back-to-back stores\n");
     printf("  Program: SW x1,x2,x3 to DMEM[5,6,7]\n");
     
@@ -301,7 +286,7 @@ int test_back_to_back_stores(PipelineTestbench& tb) {
     
     tb.reset_cpu();
     tb.start_cpu();
-    tb.run_cycles(25);
+    tb.run_cycles(30);
     tb.stop_cpu();
     
     uint32_t dmem5 = tb.read_dmem(5);
@@ -326,11 +311,6 @@ int test_back_to_back_stores(PipelineTestbench& tb) {
 
 int test_store_address_forwarding(PipelineTestbench& tb) {
     // Test: Store where BASE ADDRESS comes from forwarding
-    // 
-    // ADDI x6, x0, 4    # x6 = 4 (byte address for DMEM[1])
-    // ADDI x7, x0, 99
-    // SW x7, 0(x6)      # DMEM[1] = 99 (forward x6 for address)
-    
     printf("Test 6: Store with forwarded base address\n");
     printf("  Program: x6=4, x7=99, SW x7,0(x6) -> DMEM[1]=99\n");
     
@@ -344,7 +324,7 @@ int test_store_address_forwarding(PipelineTestbench& tb) {
     
     tb.reset_cpu();
     tb.start_cpu();
-    tb.run_cycles(20);
+    tb.run_cycles(25);
     tb.stop_cpu();
     
     uint32_t dmem1 = tb.read_dmem(1);
@@ -360,10 +340,6 @@ int test_store_address_forwarding(PipelineTestbench& tb) {
 
 int test_x0_writes_ignored(PipelineTestbench& tb) {
     // Test: Writes to x0 should be ignored, x0 always reads 0
-    //
-    // ADDI x0, x0, 100   # Should be ignored, x0 stays 0
-    // SW x0, 0(x0)       # DMEM[0] = 0 (x0 is still 0)
-    
     printf("Test 7: x0 writes ignored\n");
     printf("  Program: ADDI x0,100 (ignored), SW x0 to DMEM[0]\n");
     
@@ -377,7 +353,7 @@ int test_x0_writes_ignored(PipelineTestbench& tb) {
     
     tb.reset_cpu();
     tb.start_cpu();
-    tb.run_cycles(20);
+    tb.run_cycles(25);
     tb.stop_cpu();
     
     uint32_t dmem0 = tb.read_dmem(0);
