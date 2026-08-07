@@ -5,11 +5,37 @@ A complete RV32I RISC-V CPU with PCIe BAR interface, targeting Intel Agilex 7 FP
 ## Status: ✅ Working
 
 All 37 RV32I base instructions implemented and verified on hardware.
+**C programs compiled with GCC run correctly on the FPGA!**
 
 - **Target**: Intel Agilex 7 (AGF014)
 - **Clock**: 250 MHz (PCIe clock domain)
 - **Pipeline**: 5-stage (IF → ID → EX → MEM → WB)
 - **Memories**: 128KB IMEM, 32KB DMEM
+- **Bitstream**: `riscv-soc-revid-0x2a-git-889988e-md5-d7fed8669d33b7202e660c61af79cef3.sof`
+
+## Quick Start
+
+```bash
+# 1. Program FPGA
+quartus_pgm -c 1 -m jtag -o "p;riscv-soc-*.sof"
+
+# 2. Build a C program
+cd sw && ./build.sh sum2.c
+
+# 3. Setup VFIO and run
+cd host
+sudo ./loader ../sw/sum2.bin 0000:b1:00.0 12
+```
+
+Expected output:
+```
+=== DMEM Contents ===
+  DMEM[ 0] =         55 (0x00000037)   ← sum(1..10) = 55
+  DMEM[ 1] =         10 (0x0000000A)
+  DMEM[ 2] =      57005 (0x0000DEAD)   ← marker
+
+sum.bin: PASSED (sum(1..10) = 55)
+```
 
 ## Architecture
 
@@ -61,6 +87,8 @@ Features:
 |--------|------|-------------|
 | 0x00000 | 256B | Control/status registers |
 | 0x20000 | 128KB | IMEM (instruction memory) |
+| 0x40000 | 4KB | Bus sniffer (host transaction logger) |
+| 0x50000 | 4KB | CPU logger (CPU memory access logger) |
 | 0x80000 | 32KB | DMEM (data memory) |
 
 ### Control Registers
@@ -86,47 +114,52 @@ Complete RV32I base instruction set (37 instructions):
 | U-type | LUI, AUIPC |
 | J-type | JAL |
 
-## Files
+## Directory Structure
 
 ```
-rtl/
-  riscv_soc.sv     # Top-level SoC (CPU + memories + control)
-  axi_core_hw.sv   # AXI-Lite slave wrapper
-  cpu_logger.sv    # Debug: CPU memory access logger
-
-host/
-  riscv_host.c     # VFIO test program (15 instruction tests)
-  Makefile         # Build script
-
-build/
-  pcie_ed.qpf      # Quartus project
-  *.sof            # FPGA bitstream (after build)
+├── rtl/                    # Verilog/SystemVerilog RTL
+│   ├── riscv_soc.sv       # Top-level SoC (CPU + memories)
+│   ├── axi_core_hw.sv     # AXI-Lite slave wrapper
+│   ├── bus64to32.sv       # 64-to-32 bit bus adapter
+│   ├── bus_sniffer.sv     # Host transaction logger
+│   └── cpu_logger.sv      # CPU memory access logger
+│
+├── sw/                     # Software/firmware
+│   ├── build.sh           # Build script (uses Quartus RiscFree GCC)
+│   ├── link.ld            # Linker script
+│   ├── start.S            # Startup assembly (jump to _start)
+│   └── sum2.c             # Example: sum(1..10) test program
+│
+├── host/                   # Host-side tools
+│   ├── riscv_host.c       # Instruction test suite (15 tests)
+│   ├── loader.c           # Binary loader for .bin files
+│   └── Makefile
+│
+├── tb/                     # Verilator testbenches
+│   ├── tb_axi_core.cpp    # Main testbench (30 tests)
+│   └── ...
+│
+├── build/                  # Quartus build output
+│   └── *.sof              # FPGA bitstream
+│
+└── *.sof                   # Working bitstream (checked in)
 ```
 
-## Build
+## Building Software
 
-### FPGA Bitstream
-
-Requires Quartus 25.x with Agilex 7 support:
+See [sw/README.md](sw/README.md) for details on compiling C programs.
 
 ```bash
-./build_fpga.sh
+cd sw
+./build.sh sum2.c    # Builds sum2.bin
 ```
 
-Output: `build/riscv-soc-revid-*.sof`
-
-### Host Program
-
-```bash
-cd host && make
-```
-
-## Run on FPGA
+## Running on FPGA
 
 ### 1. Program FPGA
 
 ```bash
-quartus_pgm -c 1 -m jtag -o "p;build/riscv-soc-*.sof"
+quartus_pgm -c 1 -m jtag -o "p;riscv-soc-*.sof"
 ```
 
 ### 2. Setup VFIO
@@ -140,37 +173,26 @@ echo vfio-pci | sudo tee /sys/bus/pci/devices/$PCI/driver_override
 echo $PCI | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 ```
 
-### 3. Run Tests
+### 3. Run Tests or Load Programs
 
 ```bash
-sudo ./host/riscv_host $PCI $GROUP
+# Run instruction tests
+cd host && make
+sudo ./riscv_host $PCI $GROUP
+
+# Or load a custom program
+sudo ./loader ../sw/sum2.bin $PCI $GROUP
 ```
 
-## Test Output
+## Simulation
 
-```
-RISC-V SoC Test
-===============
-PCI: 0000:b1:00.0, IOMMU group: 12
-
-BAR0 mapped at 0x7aa00dc00000, size 8388608 bytes
-
-=== Test 1: Basic ALU ===
-Loading program...
-Running CPU...
-  DMEM[0] = 8 (expected 8)
-  Test 1: PASSED
-
-=== Test 2: BNE (count down) ===
-  DMEM[4] = 0 (expected 0)
-  Test 2: PASSED
-
-... (13 more tests) ...
-
-=== Test Summary ===
-  Passed: 15/15
-
-=== ALL TESTS PASSED ===
+```bash
+module load verilator/5.024
+cd tb
+verilator --cc --top-module axi_core_hw -I../rtl ../rtl/*.sv \
+    --exe tb_axi_core.cpp -CFLAGS "-std=c++17"
+make -C obj_dir -f Vaxi_core_hw.mk
+./obj_dir/Vaxi_core_hw
 ```
 
 ## Timing
@@ -184,8 +206,8 @@ Current build has minor timing violation (-0.305 ns) on cpu_logger debug path at
 
 ## Next Steps
 
-- [ ] Add CSRs (MTVEC, MEPC, MCAUSE) for interrupts
-- [ ] Implement M extension (MUL, DIV)
+- [ ] Add M extension (MUL, DIV)
+- [ ] Add CSRs for interrupts (MTVEC, MEPC, MCAUSE)
 - [ ] Boot Zephyr RTOS
 - [ ] Add instruction cache
 - [ ] DDR memory controller
