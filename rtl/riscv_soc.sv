@@ -176,10 +176,8 @@ module riscv_soc (
             imem_host_rdata <= imem[host_imem_idx];
     end
 
-    initial begin
-        for (int i = 0; i < 32768; i++)
-            imem[i] = 32'h00000013;  // NOP
-    end
+    // Note: IMEM initialization removed for FPGA synthesis (exceeds 5000 iteration limit)
+    // Host will load program before running CPU
 
     // =========================================================================
     // DMEM - Data Memory (32KB) - Block RAM for Zephyr RTOS
@@ -256,14 +254,8 @@ module riscv_soc (
                                dmem_b1[host_dmem_idx], dmem_b0[host_dmem_idx]};
     end
 
-    initial begin
-        for (int i = 0; i < 8192; i++) begin
-            dmem_b0[i] = 8'h0;
-            dmem_b1[i] = 8'h0;
-            dmem_b2[i] = 8'h0;
-            dmem_b3[i] = 8'h0;
-        end
-    end
+    // Note: DMEM initialization removed for FPGA synthesis (exceeds 5000 iteration limit)
+    // Block RAM initializes to 0 by default on Agilex
 
     // =========================================================================
     // Host Read Multiplexer
