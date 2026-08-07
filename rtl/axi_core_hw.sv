@@ -61,7 +61,7 @@ module axi_core_hw(
   // =========================================================================
   // AXI Master - Directly tied off (unused)
   // =========================================================================
-  
+
   assign axm_m0_awprot = 3'b000;
   assign axm_m0_arprot = 3'b000;
   assign axm_m0_wlast = 1'b1;
@@ -93,12 +93,12 @@ module axi_core_hw(
   r_state_t r_state;
 
   // Captured read address
-  logic [15:0] r_addr_reg;
+  logic [19:0] r_addr_reg;
 
   always_ff @(posedge clk) begin
     if (rst) begin
       r_state <= R_IDLE;
-      r_addr_reg <= 16'h0;
+      r_addr_reg <= 20'h0;
     end else begin
       case (r_state)
         R_IDLE: begin
@@ -107,7 +107,7 @@ module axi_core_hw(
         end
         R_ADDR: begin
           // Capture address, move to wait
-          r_addr_reg <= axi_lite_s_araddr[15:0];
+          r_addr_reg <= axi_lite_s_araddr[19:0];
           r_state <= R_WAIT;
         end
         R_WAIT: begin
@@ -146,14 +146,14 @@ module axi_core_hw(
   w_state_t w_state;
 
   // Captured write address and data
-  logic [15:0] w_addr_reg;
+  logic [19:0] w_addr_reg;
   logic [63:0] w_data_reg;
   logic        w_strb_valid;
 
   always_ff @(posedge clk) begin
     if (rst) begin
       w_state <= W_IDLE;
-      w_addr_reg <= 16'h0;
+      w_addr_reg <= 20'h0;
       w_data_reg <= 64'h0;
       w_strb_valid <= 1'b0;
     end else begin
@@ -164,7 +164,7 @@ module axi_core_hw(
         end
         W_ADDR: begin
           // Capture address and data, move to wait
-          w_addr_reg <= axi_lite_s_awaddr[15:0];
+          w_addr_reg <= axi_lite_s_awaddr[19:0];
           w_data_reg <= axi_lite_s_wdata;
           w_strb_valid <= (axi_lite_s_wstrb != 8'h00);
           w_state <= W_WAIT;
@@ -198,7 +198,7 @@ module axi_core_hw(
   //
   // Request pulses: assert for one cycle when entering W_WAIT or R_WAIT
   // The adapter captures addr/data on the same edge and starts processing.
-  
+
   // Detect rising edge of WAIT states
   logic w_wait_prev, r_wait_prev;
   always_ff @(posedge clk) begin
@@ -210,18 +210,18 @@ module axi_core_hw(
       r_wait_prev <= (r_state == R_WAIT);
     end
   end
-  
+
   // Request pulses: first cycle of WAIT state
   wire adapter_wen = (w_state == W_WAIT) && !w_wait_prev && w_strb_valid;
   wire adapter_ren = (r_state == R_WAIT) && !r_wait_prev;
-  
+
   // Address mux: write has priority
-  wire [15:0] adapter_addr = (w_state == W_WAIT) ? w_addr_reg : r_addr_reg;
-  
+  wire [19:0] adapter_addr = (w_state == W_WAIT) ? w_addr_reg : r_addr_reg;
+
   // Adapter signals
   wire        adapter_done;
   wire [63:0] adapter_rdata;
-  wire [15:0] soc_addr;
+  wire [19:0] soc_addr;
   wire [31:0] soc_wdata;
   wire        soc_wen;
   wire        soc_ren;
@@ -230,7 +230,7 @@ module axi_core_hw(
   bus64to32 u_adapter (
     .clk       (clk),
     .rst_n     (~rst),
-    
+
     // 64-bit side (from AXI state machine)
     .in_addr   (adapter_addr),
     .in_wdata  (w_data_reg),
@@ -238,7 +238,7 @@ module axi_core_hw(
     .in_ren    (adapter_ren),
     .out_rdata (adapter_rdata),
     .out_done  (adapter_done),
-    
+
     // 32-bit side (to SoC)
     .out_addr  (soc_addr),
     .out_wdata (soc_wdata),
@@ -262,17 +262,17 @@ module axi_core_hw(
   //   0x4004 = log_cycle (RO)
   //   0x4008 = control: [0]=enable, [1]=clear (write 1 to clear, auto-clears)
 
-  wire [15:0] sniff_out_addr;
+  wire [19:0] sniff_out_addr;
   wire [31:0] sniff_out_wdata;
   wire        sniff_out_wen;
   wire        sniff_out_ren;
   wire [31:0] sniff_in_rdata;
-  
+
   // Sniffer control register
   logic sniffer_enable;
   logic sniffer_clear_req;   // Request from host write
   logic sniffer_clear;       // Actual clear signal (delayed by 1 cycle)
-  
+
   always_ff @(posedge clk) begin
     if (rst) begin
       sniffer_enable <= 1'b1;  // Enabled by default
@@ -282,20 +282,20 @@ module axi_core_hw(
       // Delay the clear request by one cycle so bus_sniffer sees it
       sniffer_clear <= sniffer_clear_req;
       sniffer_clear_req <= 1'b0;  // Auto-clear request
-      
+
       if (soc_wen && is_sniffer_addr && soc_addr[7:0] == 8'h08) begin
         sniffer_enable <= soc_wdata[0];
         sniffer_clear_req <= soc_wdata[1];
       end
     end
   end
-  
+
   // Sniffer log read interface
   wire [3:0]   sniffer_log_idx = soc_addr[7:4] - 4'd1;  // Entry 0 at 0x4010, entry 1 at 0x4020
   wire [127:0] sniffer_log_entry;
   wire [31:0]  sniffer_log_count;
   wire [31:0]  sniffer_log_cycle;
-  
+
   // Sniffer log read data mux (addr 0x4xxx)
   // 0x4000 = log_count, 0x4004 = log_cycle, 0x4008 = control
   // 0x4010 = entry[0] bits[31:0],   0x4014 = entry[0] bits[63:32],
@@ -321,44 +321,44 @@ module axi_core_hw(
       endcase
     end
   end
-  
+
   // Route sniffer addresses (0x4xxx) directly, others go through sniffer to SoC
-  wire is_sniffer_addr = (soc_addr[15:12] == 4'h4);
-  
+  wire is_sniffer_addr = (soc_addr[19:12] == 8'h40);
+
   bus_sniffer #(
     .LOG_DEPTH(32)
   ) u_sniffer (
     .clk       (clk),
     .rst_n     (~rst),
-    
+
     // Control
     .log_enable (sniffer_enable),
     .log_clear  (sniffer_clear),
-    
+
     // Upstream (from bus64to32) - only non-sniffer addresses pass through
     .in_addr   (soc_addr),
     .in_wdata  (soc_wdata),
     .in_wen    (soc_wen && !is_sniffer_addr),
     .in_ren    (soc_ren && !is_sniffer_addr),
     .out_rdata (sniff_in_rdata),
-    
+
     // Downstream (to SoC)
     .out_addr  (sniff_out_addr),
     .out_wdata (sniff_out_wdata),
     .out_wen   (sniff_out_wen),
     .out_ren   (sniff_out_ren),
     .in_rdata  (soc_rdata_raw),
-    
+
     // Log read interface
     .log_idx   (soc_addr[7:4] - 4'd1),  // Entry 0 at 0x4010, entry 1 at 0x4020, etc.
     .log_entry (sniffer_log_entry),
     .log_count (sniffer_log_count),
     .log_cycle (sniffer_log_cycle)
   );
-  
+
   // SoC read data before sniffer mux
   wire [31:0] soc_rdata_raw;
-  
+
   // Final read data mux: sniffer regs or SoC data (via sniffer passthrough)
   assign soc_rdata = is_sniffer_addr ? sniffer_rdata : sniff_in_rdata;
 

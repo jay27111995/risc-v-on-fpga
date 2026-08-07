@@ -9,15 +9,17 @@
 // The EX stage is split into EX1 (forwarding mux) and EX2 (ALU) to break
 // the critical timing path: forwarding mux -> ALU -> result mux.
 //
-// Memory Map (active region selected by addr[15:12]):
-//   0x0xxx  Control registers (addr[15:12] == 4'h0)
-//   0x1xxx  IMEM - 4KB instruction memory (addr[15:12] == 4'h1)
-//   0x2xxx  DMEM - 8KB data memory (addr[15:12] == 4'h2 or 4'h3)
+// Memory Map (active region selected by addr[19:17]):
+//   0x0_0000 - 0x0_00FF  Control registers (256 bytes)
+//   0x2_0000 - 0x3_FFFF  IMEM - 128KB instruction memory
+//   0x4_0000 - 0x4_0FFF  Bus sniffer (4KB)
+//   0x5_0000 - 0x5_0FFF  CPU Logger (4KB)
+//   0x8_0000 - 0x8_7FFF  DMEM - 32KB data memory
 //   0x4xxx  Bus sniffer logs (in axi_core_hw)
 //   0x5xxx  CPU logger logs
 //
 // Address Decoding:
-//   addr[15:12] = region select (4 bits)
+//   addr[19:12] = region select (8 bits)
 //   addr[11:2]  = word index within region (ignore addr[1:0] byte offset)
 //   addr[7:2]   = used for control reg decode (6 bits = 64 registers max)
 //
@@ -46,7 +48,7 @@ module riscv_soc (
     input  logic        rst_n,
 
     // Host interface (32-bit, from bus64to32 adapter)
-    input  logic [15:0] addr,
+    input  logic [19:0] addr,
     input  logic [31:0] wdata,
     input  logic        wen,
     input  logic        ren,
@@ -75,7 +77,7 @@ module riscv_soc (
             if (ctrl_reset)
                 ctrl_reset <= 1'b0;
 
-            if (wen && addr[15:12] == 4'h0 && addr[7:2] == 6'd0) begin
+            if (wen && addr[19:12] == 8'h00 && addr[7:2] == 6'd0) begin
                 ctrl_run   <= wdata[0];
                 ctrl_reset <= wdata[1];
             end
@@ -118,7 +120,7 @@ module riscv_soc (
             perf_br_taken  <= 32'h0;
             perf_loads     <= 32'h0;
             perf_stores    <= 32'h0;
-        end else if (cpu_rst || (wen && addr[15:12] == 4'h0 && addr[7:2] == 6'd8)) begin
+        end else if (cpu_rst || (wen && addr[19:12] == 8'h00 && addr[7:2] == 6'd8)) begin
             // Clear on CPU reset or write to 0x20
             perf_cycles    <= 32'h0;
             perf_instrs    <= 32'h0;
@@ -154,34 +156,43 @@ module riscv_soc (
     // IMEM - Instruction Memory (4KB, 32-bit)
     // =========================================================================
 
-    logic [31:0] imem [0:1023];
+    // IMEM: 128KB (32768 × 32-bit) for Zephyr RTOS
+    // Host address: 0x20000 - 0x3FFFF (128KB)
+    // CPU address: 0x00000 - 0x1FFFF (direct PC mapped to same array)
+    (* ramstyle = "M20K" *) logic [31:0] imem [0:32767];
     logic [31:0] imem_host_rdata;
 
+    // Host write: address range 0x2_0000 - 0x3_FFFF (128KB)
+    wire is_imem_host = (addr[19:17] == 3'b001);  // 0x20000-0x3FFFF
+    wire [14:0] host_imem_idx = addr[16:2];
     always_ff @(posedge clk) begin
-        if (wen && addr[15:12] == 4'h1)
-            imem[addr[11:2]] <= wdata;
+        if (wen && is_imem_host)
+            imem[host_imem_idx] <= wdata;
     end
 
+    // Host read
     always_ff @(posedge clk) begin
-        if (ren && addr[15:12] == 4'h1)
-            imem_host_rdata <= imem[addr[11:2]];
+        if (ren && is_imem_host)
+            imem_host_rdata <= imem[host_imem_idx];
     end
 
     initial begin
-        for (int i = 0; i < 1024; i++)
+        for (int i = 0; i < 32768; i++)
             imem[i] = 32'h00000013;  // NOP
     end
 
     // =========================================================================
-    // DMEM - Data Memory (8KB, 32-bit) - Block RAM
+    // DMEM - Data Memory (32KB) - Block RAM for Zephyr RTOS
+    // Host address: 0x40000 - 0x47FFF (32KB)
+    // CPU address: 0x00000 - 0x07FFF (direct)
     // =========================================================================
     //
     // Split into 4 byte-wide RAMs for clean M20K inference with byte enables.
 
-    (* ramstyle = "M20K" *) logic [7:0] dmem_b0 [0:2047];  // Byte 0
-    (* ramstyle = "M20K" *) logic [7:0] dmem_b1 [0:2047];  // Byte 1
-    (* ramstyle = "M20K" *) logic [7:0] dmem_b2 [0:2047];  // Byte 2
-    (* ramstyle = "M20K" *) logic [7:0] dmem_b3 [0:2047];  // Byte 3
+    (* ramstyle = "M20K" *) logic [7:0] dmem_b0 [0:8191];  // Byte 0
+    (* ramstyle = "M20K" *) logic [7:0] dmem_b1 [0:8191];  // Byte 1
+    (* ramstyle = "M20K" *) logic [7:0] dmem_b2 [0:8191];  // Byte 2
+    (* ramstyle = "M20K" *) logic [7:0] dmem_b3 [0:8191];  // Byte 3
 
     // CPU port signals
     logic [31:0] cpu_dmem_addr;
@@ -190,12 +201,13 @@ module riscv_soc (
     logic        cpu_dmem_we;
     logic [3:0]  cpu_dmem_be;  // Byte enables for byte/half stores
 
-    // Address indexing (word-aligned, 32-bit entries)
-    wire [10:0] cpu_dmem_idx  = cpu_dmem_addr[12:2];
-    wire [10:0] host_dmem_idx = addr[12:2];
+    // Address indexing (word-aligned, 32-bit entries) - 13 bits for 8K words
+    wire [12:0] cpu_dmem_idx  = cpu_dmem_addr[14:2];
+    wire [12:0] host_dmem_idx = addr[14:2];
 
-    // Write enables
-    wire host_dmem_wen = wen && (addr[15:12] == 4'h2 || addr[15:12] == 4'h3);
+    // Write enables - DMEM at 0x8_0000 - 0x8_7FFF (32KB)
+    wire is_dmem_host = (addr[19:15] == 5'b10000);  // 0x80000-0x87FFF
+    wire host_dmem_wen = wen && is_dmem_host;
     wire cpu_dmem_wen  = cpu_dmem_we && cpu_running && !host_dmem_wen;
 
     // Byte 0
@@ -239,13 +251,13 @@ module riscv_soc (
     // Host read (registered)
     logic [31:0] dmem_host_rdata;
     always_ff @(posedge clk) begin
-        if (ren && (addr[15:12] == 4'h2 || addr[15:12] == 4'h3))
+        if (ren && is_dmem_host)
             dmem_host_rdata <= {dmem_b3[host_dmem_idx], dmem_b2[host_dmem_idx],
                                dmem_b1[host_dmem_idx], dmem_b0[host_dmem_idx]};
     end
 
     initial begin
-        for (int i = 0; i < 2048; i++) begin
+        for (int i = 0; i < 8192; i++) begin
             dmem_b0[i] = 8'h0;
             dmem_b1[i] = 8'h0;
             dmem_b2[i] = 8'h0;
@@ -256,11 +268,16 @@ module riscv_soc (
     // =========================================================================
     // Host Read Multiplexer
     // =========================================================================
+    // New Memory Map:
+    //   0x0_0000 - 0x0_00FF: Control registers
+    //   0x1_0000 - 0x2_FFFF: IMEM (128KB)
+    //   0x3_0000 - 0x3_7FFF: DMEM (32KB)
+    //   0x5_0000: CPU logger
 
     always_comb begin
         rdata = 32'h0;
-        case (addr[15:12])
-            4'h0: begin
+        casez (addr[19:12])
+            8'h00: begin  // Control registers
                 case (addr[7:2])
                     6'd0:  rdata = {30'b0, ctrl_reset, ctrl_run};  // 0x00 CTRL
                     6'd2:  rdata = {31'b0, cpu_running};           // 0x08 STATUS
@@ -275,10 +292,10 @@ module riscv_soc (
                     default: rdata = 32'h0;
                 endcase
             end
-            4'h1:        rdata = imem_host_rdata;
-            4'h2, 4'h3:  rdata = dmem_host_rdata;
-            4'h5:        rdata = cpu_logger_rdata;  // CPU logger
-            default:     rdata = 32'h0;
+            8'h2?, 8'h3?: rdata = imem_host_rdata;   // IMEM 0x2_0000 - 0x3_FFFF
+            8'h8?:        rdata = dmem_host_rdata;   // DMEM 0x8_0000 - 0x8_7FFF
+            8'h50:        rdata = cpu_logger_rdata;  // CPU logger 0x5_0000
+            default:      rdata = 32'h0;
         endcase
     end
 
@@ -346,7 +363,7 @@ module riscv_soc (
             if_pc <= if_pc_next;
     end
 
-    assign if_instr = imem[if_pc[11:2]];
+    assign if_instr = imem[if_pc[16:2]];
     assign cpu_pc = if_pc;
 
     // =========================================================================
@@ -804,7 +821,7 @@ module riscv_soc (
             cpulog_clear <= cpulog_clear_req;
             cpulog_clear_req <= 1'b0;  // Auto-clear request
 
-            if (wen && addr[15:12] == 4'h5 && addr[7:0] == 8'h08) begin
+            if (wen && addr[19:12] == 8'h50 && addr[7:0] == 8'h08) begin
                 cpulog_enable <= wdata[0];
                 cpulog_clear_req <= wdata[1];
             end

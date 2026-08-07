@@ -23,25 +23,25 @@ module bus_sniffer #(
 ) (
     input  logic        clk,
     input  logic        rst_n,
-    
+
     // Control
     input  logic        log_enable,    // Enable logging
     input  logic        log_clear,     // Clear log (pulse)
-    
+
     // Upstream interface (from master)
-    input  logic [15:0] in_addr,
+    input  logic [19:0] in_addr,
     input  logic [31:0] in_wdata,
     input  logic        in_wen,
     input  logic        in_ren,
     output logic [31:0] out_rdata,
-    
+
     // Downstream interface (to slave)
-    output logic [15:0] out_addr,
+    output logic [19:0] out_addr,
     output logic [31:0] out_wdata,
     output logic        out_wen,
     output logic        out_ren,
     input  logic [31:0] in_rdata,
-    
+
     // Log read interface
     input  logic [3:0]  log_idx,      // Which log entry to read (0 = newest)
     output logic [127:0] log_entry,   // Log entry data
@@ -52,48 +52,48 @@ module bus_sniffer #(
     // =========================================================================
     // Passthrough - directly connect upstream to downstream
     // =========================================================================
-    
+
     assign out_addr  = in_addr;
     assign out_wdata = in_wdata;
     assign out_wen   = in_wen;
     assign out_ren   = in_ren;
     assign out_rdata = in_rdata;
-    
+
     // =========================================================================
     // Cycle Counter
     // =========================================================================
-    
+
     logic [31:0] cycle_cnt;
-    
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             cycle_cnt <= 32'h0;
         else
             cycle_cnt <= cycle_cnt + 1;
     end
-    
+
     assign log_cycle = cycle_cnt;
-    
+
     // =========================================================================
     // Transaction Log
     // =========================================================================
-    
+
     // Circular buffer
     logic [127:0] log_mem [0:LOG_DEPTH-1];
     logic [$clog2(LOG_DEPTH)-1:0] log_wr_ptr;
     logic [31:0] trans_count;
-    
+
     // Capture read data one cycle later
     logic        pending_read;
-    logic [15:0] pending_addr;
+    logic [19:0] pending_addr;
     logic [15:0] pending_time;
-    
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             log_wr_ptr <= '0;
             trans_count <= 32'h0;
             pending_read <= 1'b0;
-            pending_addr <= 16'h0;
+            pending_addr <= 20'h0;
             pending_time <= 16'h0;
         end else if (log_clear) begin
             log_wr_ptr <= '0;
@@ -106,7 +106,7 @@ module bus_sniffer #(
                 pending_addr <= in_addr;
                 pending_time <= cycle_cnt[15:0];
             end
-            
+
             // Log write immediately (only when logging enabled)
             if (in_wen && log_enable) begin
                 log_mem[log_wr_ptr] <= {
@@ -120,7 +120,7 @@ module bus_sniffer #(
                 log_wr_ptr <= log_wr_ptr + 1;
                 trans_count <= trans_count + 1;
             end
-            
+
             // Log read when data returns (1 cycle after ren)
             if (pending_read) begin
                 pending_read <= 1'b0;
@@ -137,9 +137,9 @@ module bus_sniffer #(
             end
         end
     end
-    
+
     assign log_count = trans_count;
-    
+
     // Read log entry (0 = newest, 1 = second newest, etc.)
     wire [$clog2(LOG_DEPTH)-1:0] read_idx = log_wr_ptr - 1 - log_idx;
     assign log_entry = log_mem[read_idx];
