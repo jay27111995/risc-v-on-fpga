@@ -71,7 +71,18 @@ uint64_t read64(uint32_t offset) {
 }
 
 void write32(uint32_t offset, uint32_t value) {
-    write64(offset, value);
+    // Handle 32-bit writes properly for 64-bit BAR
+    uint32_t aligned_offset = offset & ~7;  // Align to 8 bytes
+    uint64_t current = bar64[aligned_offset / 8];
+    
+    if (offset & 4) {
+        // Upper 32 bits
+        current = (current & 0xFFFFFFFF) | ((uint64_t)value << 32);
+    } else {
+        // Lower 32 bits
+        current = (current & 0xFFFFFFFF00000000ULL) | value;
+    }
+    bar64[aligned_offset / 8] = current;
 }
 
 uint32_t read32(uint32_t offset) {
