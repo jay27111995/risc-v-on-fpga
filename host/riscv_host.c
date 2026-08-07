@@ -108,6 +108,19 @@ void write_imem_pair(uint32_t pair_idx, uint32_t even_word, uint32_t odd_word) {
     write64(offset, data);
 }
 
+void write_imem(uint32_t word_idx, uint32_t value) {
+    // Read-modify-write to handle single word writes
+    uint32_t pair_idx = word_idx / 2;
+    uint32_t offset = BAR_IMEM + pair_idx * 8;
+    uint64_t data = read64(offset);
+    if (word_idx & 1) {
+        data = (data & 0xFFFFFFFF) | ((uint64_t)value << 32);
+    } else {
+        data = (data & 0xFFFFFFFF00000000ULL) | value;
+    }
+    write64(offset, data);
+}
+
 uint32_t read_imem(uint32_t word_idx) {
     uint32_t offset = BAR_IMEM + (word_idx & ~1) * 4;
     uint64_t data = read64(offset);
