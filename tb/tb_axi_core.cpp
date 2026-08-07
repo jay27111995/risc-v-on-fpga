@@ -1,5 +1,42 @@
+// ============================================================================
 // AXI Core + RISC-V SoC Testbench
-// Tests the complete AXI-Lite wrapper with embedded RISC-V SoC
+// ============================================================================
+//
+// Verilator simulation testbench for the complete RV32I SoC with AXI-Lite
+// interface. Tests all 37 base instructions plus pipeline hazards.
+//
+// BAR Memory Map (matches FPGA hardware):
+//   0x00000 - 0x000FF : Control registers (CTRL, STATUS, PC, CYCLES, etc.)
+//   0x20000 - 0x3FFFF : IMEM - 128KB instruction memory
+//   0x80000 - 0x87FFF : DMEM - 32KB data memory
+//
+// Control Registers:
+//   0x00 CTRL   - [0] RUN, [1] RESET
+//   0x08 STATUS - [0] RUNNING
+//   0x10 PC     - Current program counter
+//   0x20 CYCLES - Cycle count (write to clear all perf counters)
+//
+// Test Coverage (30 tests):
+//   1-6:   Branch instructions (BEQ, BNE, BLT, BLTU, BGE, BGEU)
+//   7-10:  Shift operations (SLL, SRL, SRA, SLLI)
+//   11-12: Set-less-than (SLT, SLTU)
+//   13-14: Jump instructions (JAL, JALR)
+//   15-16: Upper immediate (LUI, AUIPC)
+//   17-18: Byte/halfword load/store (SB/LB/LBU, SH/LH/LHU)
+//   19-21: ALU operations (SUB, AND/OR/XOR, ANDI/ORI/XORI)
+//   22-23: Immediate shifts and compares (SRLI/SRAI, SLTI/SLTIU)
+//   24:    Load word (LW)
+//   25-30: Pipeline hazards (forwarding, load-use, branches, loops)
+//
+// Build:
+//   verilator --cc --top-module axi_core_hw -I../rtl ../rtl/*.sv \
+//             --exe tb_axi_core.cpp -CFLAGS "-std=c++17" -Wno-CASEINCOMPLETE
+//   make -C obj_dir -f Vaxi_core_hw.mk
+//
+// Run:
+//   ./obj_dir/Vaxi_core_hw
+//
+// ============================================================================
 
 #include <cstdio>
 #include <cstdlib>

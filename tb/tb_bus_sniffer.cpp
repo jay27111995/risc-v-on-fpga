@@ -1,4 +1,24 @@
-// Testbench for bus_sniffer
+// ============================================================================
+// Bus Sniffer Testbench
+// ============================================================================
+//
+// Tests the bus_sniffer debug module which captures host AXI transactions:
+// - Write transactions (address + data)
+// - Read transactions (address + returned data)
+//
+// The sniffer maintains a circular buffer of recent host transactions for
+// debugging PCIe BAR accesses to the SoC.
+//
+// Log Entry Format (128 bits):
+//   [127:96] - Write/read data
+//   [95:64]  - Reserved
+//   [63:48]  - Address[15:0]
+//   [47:16]  - Reserved
+//   [15:0]   - Timestamp (cycle counter)
+//   [0]      - Type (0=read, 1=write)
+//
+// ============================================================================
+
 #include <cstdio>
 #include "Vbus_sniffer.h"
 #include "verilated.h"
