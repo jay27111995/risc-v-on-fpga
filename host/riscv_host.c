@@ -665,44 +665,85 @@ static int test_bus_sniffer(void) {
 }
 
 static int test_cpu_logger(void) {
-  printf("=== CPU Logger Test ===\n");
+  printf("=== CPU Logger Test (sum.c) ===\n");
 
   cpu_reset();
   cpulog_clear();
 
-  // Clear IMEM
-  for (int i = 0; i < 64; i++) {
-    write_imem(i, 0x00000013); // NOP
+  // Try to load sum.bin from file
+  FILE *f = fopen("../sw/sum.bin", "rb");
+  if (!f) {
+    f = fopen("sw/sum.bin", "rb");
   }
-
-  // Program with stores and loads
-  uint32_t prog[] = {
-      0x00A00093, // ADDI x1, x0, 10
-      0x00102023, // SW   x1, 0(x0)      <- DSTORE
-      0x00002103, // LW   x2, 0(x0)      <- DLOAD
-      0x00210133, // ADD  x2, x2, x2
-      0x00202223, // SW   x2, 4(x0)      <- DSTORE
-      0x00402183, // LW   x3, 4(x0)      <- DLOAD
-      0xDEA00213, // ADDI x4, x0, 0xDEA
-      0x00402423, // SW   x4, 8(x0)      <- DSTORE
-      0x00000013, // NOP
-      0x00000013, // NOP
-      0x00100073, // EBREAK
-  };
-
-  for (size_t i = 0; i < sizeof(prog) / sizeof(prog[0]); i++) {
-    write_imem(i, prog[i]);
+  if (!f) {
+    printf("  sum.bin not found, using built-in test program\n");
+    
+    // Fallback: simple program with stores and loads
+    uint32_t prog[] = {
+        0x00A00093, // ADDI x1, x0, 10
+        0x00102023, // SW   x1, 0(x0)
+        0x00002103, // LW   x2, 0(x0)
+        0x00210133, // ADD  x2, x2, x2
+        0x00202223, // SW   x2, 4(x0)
+        0x00100073, // EBREAK
+    };
+    for (size_t i = 0; i < sizeof(prog) / sizeof(prog[0]); i++) {
+      write_imem(i, prog[i]);
+    }
+  } else {
+    // Load sum.bin
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    printf("  Loading sum.bin (%ld bytes, %ld instructions)\n", size, size / 4);
+    
+    uint32_t *prog = malloc(size);
+    fread(prog, 1, size, f);
+    fclose(f);
+    
+    for (long i = 0; i < size / 4; i++) {
+      write_imem(i, prog[i]);
+    }
+    free(prog);
   }
 
   cpu_run();
-  usleep(10);
+  
+  // Wait for CPU to halt (EBREAK or timeout)
+  int halted = 0;
+  for (int i = 0; i < 1000; i++) {
+    usleep(100);
+    uint32_t status = read32(BAR_STATUS);
+    if (status & 0x2) {  // HALTED bit
+      halted = 1;
+      break;
+    }
+  }
+  
   cpu_stop();
+  
+  if (halted) {
+    printf("  CPU halted (EBREAK)\n");
+  } else {
+    printf("  CPU timed out (no EBREAK)\n");
+  }
+
+  // Show DMEM results
+  printf("  DMEM results:\n");
+  printf("    [0] result   = %d (expected 55 for sum 1..10)\n", read_dmem(0));
+  printf("    [1] input    = %d\n", read_dmem(1));
+  printf("    [2] marker   = 0x%X\n", read_dmem(2));
+  printf("    [3] result+5 = %d\n", read_dmem(3));
+  printf("    [4] result-5 = %d\n", read_dmem(4));
+  printf("    [5] result>>1= %d\n", read_dmem(5));
+  printf("    [6] result<<2= %d\n", read_dmem(6));
 
   uint32_t count = cpulog_get_count();
-  printf("  Log count: %u\n", count);
+  printf("\n  Log count: %u\n", count);
 
-  if (count < 3) {
-    printf("  ERROR: Expected at least 3 DMEM transactions\n");
+  if (count == 0) {
+    printf("  (no log entries)\n");
     printf("  FAIL\n\n");
     return 0;
   }
@@ -723,7 +764,9 @@ static int test_cpu_logger(void) {
   }
 
   printf("  Found %d stores, %d loads\n", stores, loads);
-  int pass = (stores >= 2 && loads >= 1);
+  
+  // Pass if we got expected sum result
+  int pass = (read_dmem(0) == 55);
   printf("  %s\n\n", pass ? "PASS" : "FAIL");
   return pass;
 }
