@@ -159,7 +159,7 @@ static inline void sniffer_read_entry(int idx, sniffer_entry_t *entry) {
   uint32_t w3 = read32(base + 0xC);
 
   entry->is_write = w0 & 1;
-  entry->address = (w0 >> 1) & 0x7FFFF;
+  entry->address = ((w0 >> 1) & 0x7FFFF) << 1;  // Restore full address
   entry->timestamp = ((uint64_t)w2 << 32) | w1;
   entry->data = w3;
 }
