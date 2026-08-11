@@ -185,7 +185,13 @@ static inline void sniffer_dump(int max_entries) {
   for (int i = 0; i < n; i++) {
     sniffer_read_entry(i, &entries[i]);
   }
-  uint64_t base_cycle = entries[n - 1].timestamp;
+
+  // Find minimum timestamp as base
+  uint64_t base_cycle = entries[0].timestamp;
+  for (int i = 1; i < n; i++) {
+    if (entries[i].timestamp < base_cycle)
+      base_cycle = entries[i].timestamp;
+  }
 
   for (int i = 0; i < n; i++) {
     sniffer_print_entry(i, &entries[i], base_cycle);
@@ -246,7 +252,13 @@ static inline void cpulog_dump(int max_entries) {
   for (int i = 0; i < n; i++) {
     cpulog_read_entry(i, &entries[i]);
   }
-  uint64_t base_cycle = entries[n - 1].timestamp;
+
+  // Find minimum timestamp as base
+  uint64_t base_cycle = entries[0].timestamp;
+  for (int i = 1; i < n; i++) {
+    if (entries[i].timestamp < base_cycle)
+      base_cycle = entries[i].timestamp;
+  }
 
   for (int i = 0; i < n; i++) {
     cpulog_print_entry(i, &entries[i], base_cycle);
