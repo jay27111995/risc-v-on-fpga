@@ -139,44 +139,41 @@ int main(int argc, char *argv[]) {
   printf("\n");
 
   // -------------------------------------------------------------------------
-  // Test 4: Address capture
+  // Test 4: Write data verification in log
   // -------------------------------------------------------------------------
-  printf("Test 4: Address capture\n");
-  printf("-----------------------\n");
+  printf("Test 4: Write data in log\n");
+  printf("-------------------------\n");
 
   sniffer_clear();
 
-  // Write to specific addresses and verify they're logged
+  // Write to specific addresses
   write32(BAR_DMEM + 0x100, 0xAAAAAAAA);
   write32(BAR_DMEM + 0x200, 0xBBBBBBBB);
 
   usleep(1000);
 
-  printf("Log entries:\n");
-  sniffer_dump(10);
-
-  // Check addresses in log
+  // Check that the WRITE transactions have correct data
+  // (ignore the RMW reads which show old data)
   count = sniffer_get_count();
-  int found_100 = 0, found_200 = 0;
+  int found_aaaa = 0, found_bbbb = 0;
 
   for (uint32_t i = 0; i < count && i < 20; i++) {
     sniffer_entry_t e;
     sniffer_read_entry(i, &e);
-    // Address stored is BAR-relative, DMEM is at 0x80000
-    if ((e.address & 0xFFF00) == 0x80100)
-      found_100 = 1;
-    if ((e.address & 0xFFF00) == 0x80200)
-      found_200 = 1;
+    if (e.is_write && e.data == 0xAAAAAAAA)
+      found_aaaa = 1;
+    if (e.is_write && e.data == 0xBBBBBBBB)
+      found_bbbb = 1;
   }
 
-  printf("\nAddress 0x80100: %s\n", found_100 ? "FOUND" : "NOT FOUND");
-  printf("Address 0x80200: %s\n", found_200 ? "FOUND" : "NOT FOUND");
+  printf("Write 0xAAAAAAAA: %s\n", found_aaaa ? "FOUND" : "NOT FOUND");
+  printf("Write 0xBBBBBBBB: %s\n", found_bbbb ? "FOUND" : "NOT FOUND");
 
-  if (found_100 && found_200) {
-    printf("PASS: Addresses captured correctly\n");
+  if (found_aaaa && found_bbbb) {
+    printf("PASS: Write data captured correctly\n");
   } else {
-    printf("WARNING: Some addresses not found (may be 64-bit BAR alignment)\n");
-    // Don't count as error - depends on BAR access pattern
+    printf("ERROR: Write data not found in log!\n");
+    errors++;
   }
   printf("\n");
 
