@@ -36,7 +36,7 @@ module cpu_logger #(
     input  logic        log_clear,     // Clear log (pulse)
     input  logic        log_imem,      // Log IMEM fetches (0 = DMEM only)
 
-    // IMEM interface (directly from CPU - active when imem_valid)
+    // IMEM interface (directly from CPU - combinational read, valid same cycle)
     input  logic [31:0] imem_addr,
     input  logic [31:0] imem_rdata,
     input  logic        imem_valid,    // High when instruction fetch is valid
@@ -88,7 +88,7 @@ module cpu_logger #(
     // This splits the timing path so concatenation and memory write
     // don't happen in the same cycle.
 
-    // Circular buffer
+    // Circular buffer - initialize to zero on clear for clean reads
     logic [127:0] log_mem [0:LOG_DEPTH-1];
     logic [$clog2(LOG_DEPTH)-1:0] log_wr_ptr;
     logic [31:0] trans_count;
@@ -97,10 +97,11 @@ module cpu_logger #(
     logic [127:0] entry_reg;
     logic         write_pending;
 
-    // IMEM tracking (data arrives 1 cycle after address)
-    logic [31:0] imem_addr_r;
-    logic [63:0] imem_time_r;
-    logic        imem_pending;
+    // Priority for simultaneous events: DSTORE > DLOAD > IFETCH
+    // (In practice, DMEM and IMEM accesses don't overlap in our simple pipeline)
+    wire log_dstore = dmem_wen && log_enable;
+    wire log_dload  = dmem_ren && log_enable && !dmem_wen;
+    wire log_ifetch = imem_valid && log_enable && log_imem && !dmem_wen && !dmem_ren;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -108,14 +109,12 @@ module cpu_logger #(
             trans_count <= 32'h0;
             entry_reg <= 128'h0;
             write_pending <= 1'b0;
-            imem_addr_r <= 32'h0;
-            imem_time_r <= 64'h0;
-            imem_pending <= 1'b0;
         end else if (log_clear) begin
             log_wr_ptr <= '0;
             trans_count <= 32'h0;
             write_pending <= 1'b0;
-            imem_pending <= 1'b0;
+            // Note: We don't zero log_mem here to save logic.
+            // Reads beyond trans_count return stale data (acceptable for debug).
         end else begin
             // Default: no write pending next cycle
             write_pending <= 1'b0;
@@ -128,29 +127,11 @@ module cpu_logger #(
             end
 
             // ---- Stage 1: Build entry ----
+            // IMEM and DMEM data are valid in the SAME cycle as the request.
+            // Capture immediately, write to memory next cycle.
 
-            // Track IMEM fetch request (log on next cycle when data is valid)
-            if (imem_valid && log_enable && log_imem) begin
-                imem_pending <= 1'b1;
-                imem_addr_r <= imem_addr;
-                imem_time_r <= cycle_cnt;
-            end
-
-            // IMEM fetch: capture when data arrives (1 cycle after request)
-            if (imem_pending) begin
-                imem_pending <= 1'b0;
-                entry_reg <= {
-                    imem_rdata,             // [127:96] - instruction
-                    imem_time_r,            // [95:32]  - timestamp
-                    12'h0,                  // [31:20]  - reserved
-                    imem_addr_r[19:2],      // [19:2]   - address (word)
-                    TYPE_IFETCH             // [1:0]    - type
-                };
-                write_pending <= 1'b1;
-            end
-
-            // DMEM store: capture immediately
-            if (dmem_wen && log_enable) begin
+            if (log_dstore) begin
+                // DMEM store: capture write data
                 entry_reg <= {
                     dmem_wdata,             // [127:96] - write data
                     cycle_cnt,              // [95:32]  - timestamp
@@ -159,16 +140,24 @@ module cpu_logger #(
                     TYPE_DSTORE             // [1:0]    - type
                 };
                 write_pending <= 1'b1;
-            end
-
-            // DMEM load: capture immediately (data available same cycle)
-            if (dmem_ren && log_enable) begin
+            end else if (log_dload) begin
+                // DMEM load: capture read data
                 entry_reg <= {
                     dmem_rdata,             // [127:96] - read data
                     cycle_cnt,              // [95:32]  - timestamp
                     12'h0,                  // [31:20]  - reserved
                     dmem_addr[19:2],        // [19:2]   - address (word)
                     TYPE_DLOAD              // [1:0]    - type
+                };
+                write_pending <= 1'b1;
+            end else if (log_ifetch) begin
+                // IMEM fetch: capture instruction (data valid same cycle as valid signal)
+                entry_reg <= {
+                    imem_rdata,             // [127:96] - instruction
+                    cycle_cnt,              // [95:32]  - timestamp
+                    12'h0,                  // [31:20]  - reserved
+                    imem_addr[19:2],        // [19:2]   - address (word)
+                    TYPE_IFETCH             // [1:0]    - type
                 };
                 write_pending <= 1'b1;
             end

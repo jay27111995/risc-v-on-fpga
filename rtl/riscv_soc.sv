@@ -93,7 +93,7 @@ module riscv_soc (
                 ctrl_reset <= 1'b0;
                 cpu_halted <= 1'b0;  // Clear halted on reset
             end
-            
+
             // EBREAK halts the CPU
             if (wb_ebreak && cpu_running)
                 cpu_halted <= 1'b1;

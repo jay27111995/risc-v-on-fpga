@@ -25,15 +25,15 @@
 //
 module decoder (
     input  logic [31:0] instr,       // 32-bit instruction
-    
+
     // Register addresses
     output logic [4:0]  rs1,         // source register 1
     output logic [4:0]  rs2,         // source register 2
     output logic [4:0]  rd,          // destination register
-    
+
     // Immediate value (sign-extended to 32 bits)
     output logic [31:0] imm,
-    
+
     // Control signals
     output logic [3:0]  alu_op,      // ALU operation (4 bits)
     output logic        reg_write,   // write to register file?
@@ -93,7 +93,7 @@ always_comb begin
     lui = 0;
     auipc = 0;
     ebreak = 0;
-    
+
     case (opcode)
         OP_RTYPE: begin  // R-type: ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU
             reg_write = 1;
@@ -110,7 +110,7 @@ always_comb begin
                 default: alu_op = 4'b0000;
             endcase
         end
-        
+
         OP_ITYPE: begin  // I-type: ADDI, ANDI, ORI, XORI, SLLI, SRLI, SRAI, SLTI, SLTIU
             reg_write = 1;
             alu_src = 1;  // use immediate
@@ -135,7 +135,7 @@ always_comb begin
                 default: alu_op = 4'b0000;
             endcase
         end
-        
+
         OP_LOAD: begin  // LB, LH, LW, LBU, LHU: rd = memory[rs1 + imm]
             reg_write = 1;   // write loaded data to rd
             alu_src = 1;     // ALU uses immediate
@@ -145,7 +145,7 @@ always_comb begin
             // I-type immediate (same as ADDI)
             imm = {{20{instr[31]}}, instr[31:20]};
         end
-        
+
         OP_STORE: begin  // SB, SH, SW: memory[rs1 + imm] = rs2
             reg_write = 0;   // no register write
             alu_src = 1;     // ALU uses immediate
@@ -155,7 +155,7 @@ always_comb begin
             // S-type immediate: split across instr[31:25] and instr[11:7]
             imm = {{20{instr[31]}}, instr[31:25], instr[11:7]};
         end
-        
+
         OP_BRANCH: begin  // BEQ, BNE: if (condition) PC += imm
             branch = 1;
             branch_op = funct3;  // 000=BEQ, 001=BNE, 100=BLT, 101=BGE, 110=BLTU, 111=BGEU
@@ -163,14 +163,14 @@ always_comb begin
             // B-type immediate: imm[12|10:5|4:1|11], shifted left by 1 (2-byte aligned)
             imm = {{20{instr[31]}}, instr[7], instr[30:25], instr[11:8], 1'b0};
         end
-        
+
         OP_JAL: begin  // JAL: rd = PC + 4, PC = PC + imm
             reg_write = 1;   // Write PC+4 to rd
             jump = 1;
             // J-type immediate: imm[20|10:1|11|19:12], shifted left by 1
             imm = {{12{instr[31]}}, instr[19:12], instr[20], instr[30:21], 1'b0};
         end
-        
+
         OP_JALR: begin  // JALR: rd = PC + 4, PC = rs1 + imm
             reg_write = 1;   // Write PC+4 to rd
             jump = 1;
@@ -180,21 +180,21 @@ always_comb begin
             // I-type immediate
             imm = {{20{instr[31]}}, instr[31:20]};
         end
-        
+
         OP_LUI: begin  // LUI: rd = imm << 12
             reg_write = 1;
             lui = 1;
             // U-type immediate: upper 20 bits, lower 12 bits are 0
             imm = {instr[31:12], 12'b0};
         end
-        
+
         OP_AUIPC: begin  // AUIPC: rd = PC + (imm << 12)
             reg_write = 1;
             auipc = 1;
             // U-type immediate: upper 20 bits, lower 12 bits are 0
             imm = {instr[31:12], 12'b0};
         end
-        
+
         OP_SYSTEM: begin  // ECALL, EBREAK
             // EBREAK: instr = 0x00100073 (imm[11:0] = 0x001)
             // ECALL:  instr = 0x00000073 (imm[11:0] = 0x000)
@@ -203,7 +203,7 @@ always_comb begin
             end
             // ECALL not implemented - treated as NOP
         end
-        
+
         default: begin
             // NOP or unknown - do nothing
         end
