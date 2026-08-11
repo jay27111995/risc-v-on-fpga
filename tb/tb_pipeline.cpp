@@ -4,7 +4,7 @@
 //
 // Focused tests for pipeline hazards and corner cases:
 // 1. Store forwarding - SW using value just computed by ADD
-// 2. Load-use hazard - LW followed by instruction using loaded value  
+// 2. Load-use hazard - LW followed by instruction using loaded value
 // 3. Back-to-back stores
 // 4. Store after branch
 // 5. Forwarding from MEM stage
@@ -38,28 +38,28 @@ class PipelineTestbench {
 public:
     Vriscv_soc* soc;
     int cycle_count;
-    
+
     PipelineTestbench() {
         soc = new Vriscv_soc;
         cycle_count = 0;
-        
+
         soc->rst_n = 0;
         soc->clk = 0;
         soc->wen = 0;
         soc->ren = 0;
         soc->addr = 0;
         soc->wdata = 0;
-        
+
         tick();
         tick();
         soc->rst_n = 1;
         tick();
     }
-    
+
     ~PipelineTestbench() {
         delete soc;
     }
-    
+
     void tick() {
         soc->clk = 0;
         soc->eval();
@@ -67,7 +67,7 @@ public:
         soc->eval();
         cycle_count++;
     }
-    
+
     void bar_write(uint32_t addr, uint32_t data) {
         soc->wen = 1;
         soc->addr = addr & 0xFFFFF;  // 20-bit address
@@ -76,7 +76,7 @@ public:
         soc->wen = 0;
         tick();
     }
-    
+
     uint32_t bar_read(uint32_t addr) {
         soc->ren = 1;
         soc->addr = addr & 0xFFFFF;  // 20-bit address
@@ -85,48 +85,48 @@ public:
         tick();
         return static_cast<uint32_t>(soc->rdata);
     }
-    
+
     void write_imem(uint32_t idx, uint32_t instr) {
         bar_write(ADDR_IMEM + idx * 4, instr);
     }
-    
+
     void write_dmem(uint32_t idx, uint32_t data) {
         bar_write(ADDR_DMEM + idx * 4, data);
     }
-    
+
     uint32_t read_dmem(uint32_t idx) {
         return bar_read(ADDR_DMEM + idx * 4);
     }
-    
+
     uint32_t read_pc() {
         return static_cast<uint32_t>(bar_read(ADDR_PC));
     }
-    
+
     void reset_cpu() {
         bar_write(ADDR_CTRL, 0x02);  // Reset bit
         for (int i = 0; i < 5; i++) tick();
         bar_write(ADDR_CTRL, 0x00);  // Clear reset
         for (int i = 0; i < 5; i++) tick();
     }
-    
+
     void start_cpu() {
         bar_write(ADDR_CTRL, 0x01);  // Run bit
     }
-    
+
     void stop_cpu() {
         bar_write(ADDR_CTRL, 0x00);  // Clear run bit
     }
-    
+
     void run_cycles(int n) {
         for (int i = 0; i < n; i++) tick();
     }
-    
+
     void clear_imem() {
         for (int i = 0; i < 32; i++) {
             write_imem(i, 0x00000013);  // NOP (addi x0, x0, 0)
         }
     }
-    
+
     void clear_dmem() {
         for (int i = 0; i < 16; i++) {
             write_dmem(i, 0);
@@ -142,24 +142,24 @@ int test_store_forwarding_mem(PipelineTestbench& tb) {
     // Test: Store uses value from instruction in MEM stage (1 cycle ahead)
     printf("Test 1: Store forwarding from MEM stage\n");
     printf("  Program: x1=5, x2=3, x3=x1+x2=8, SW x3 to DMEM[0]\n");
-    
+
     tb.clear_imem();
     tb.clear_dmem();
-    
+
     tb.write_imem(0, 0x00500093);  // ADDI x1, x0, 5     # x1 = 5
-    tb.write_imem(1, 0x00300113);  // ADDI x2, x0, 3     # x2 = 3  
+    tb.write_imem(1, 0x00300113);  // ADDI x2, x0, 3     # x2 = 3
     tb.write_imem(2, 0x002081B3);  // ADD  x3, x1, x2    # x3 = 8
     tb.write_imem(3, 0x00302023);  // SW   x3, 0(x0)     # DMEM[0] = 8 (forward from MEM)
     tb.write_imem(4, 0x00000063);  // BEQ  x0, x0, 0     # loop
-    
+
     tb.reset_cpu();
     tb.start_cpu();
     tb.run_cycles(30);
     tb.stop_cpu();
-    
+
     uint32_t dmem0 = tb.read_dmem(0);
     printf("  DMEM[0] = %u (expected 8)\n", dmem0);
-    
+
     if (dmem0 != 8) {
         printf("  FAILED!\n\n");
         return 1;
@@ -172,25 +172,25 @@ int test_store_forwarding_wb(PipelineTestbench& tb) {
     // Test: Store uses value from instruction in WB stage (2 cycles ahead)
     printf("Test 2: Store forwarding from WB stage\n");
     printf("  Program: x3=5+3=8, NOP, SW x3 to DMEM[1]\n");
-    
+
     tb.clear_imem();
     tb.clear_dmem();
-    
+
     tb.write_imem(0, 0x00500093);  // ADDI x1, x0, 5
     tb.write_imem(1, 0x00300113);  // ADDI x2, x0, 3
     tb.write_imem(2, 0x002081B3);  // ADD  x3, x1, x2    # x3 = 8
     tb.write_imem(3, 0x00000013);  // NOP
     tb.write_imem(4, 0x00302223);  // SW   x3, 4(x0)     # DMEM[1] = 8 (forward from WB)
     tb.write_imem(5, 0x00000063);  // BEQ  x0, x0, 0
-    
+
     tb.reset_cpu();
     tb.start_cpu();
     tb.run_cycles(30);
     tb.stop_cpu();
-    
+
     uint32_t dmem1 = tb.read_dmem(1);
     printf("  DMEM[1] = %u (expected 8)\n", dmem1);
-    
+
     if (dmem1 != 8) {
         printf("  FAILED!\n\n");
         return 1;
@@ -203,27 +203,27 @@ int test_store_no_forwarding(PipelineTestbench& tb) {
     // Test: Store uses value that's already in register file (no forwarding needed)
     printf("Test 3: Store without forwarding (value in regfile)\n");
     printf("  Program: x3=8, NOPs, SW x3 to DMEM[2]\n");
-    
+
     tb.clear_imem();
     tb.clear_dmem();
-    
+
     tb.write_imem(0, 0x00500093);  // ADDI x1, x0, 5
     tb.write_imem(1, 0x00300113);  // ADDI x2, x0, 3
     tb.write_imem(2, 0x002081B3);  // ADD  x3, x1, x2    # x3 = 8
     tb.write_imem(3, 0x00000013);  // NOP
-    tb.write_imem(4, 0x00000013);  // NOP  
+    tb.write_imem(4, 0x00000013);  // NOP
     tb.write_imem(5, 0x00000013);  // NOP
     tb.write_imem(6, 0x00302423);  // SW   x3, 8(x0)     # DMEM[2] = 8 (from regfile)
     tb.write_imem(7, 0x00000063);  // BEQ  x0, x0, 0
-    
+
     tb.reset_cpu();
     tb.start_cpu();
     tb.run_cycles(35);
     tb.stop_cpu();
-    
+
     uint32_t dmem2 = tb.read_dmem(2);
     printf("  DMEM[2] = %u (expected 8)\n", dmem2);
-    
+
     if (dmem2 != 8) {
         printf("  FAILED!\n\n");
         return 1;
@@ -237,29 +237,29 @@ int test_load_use_hazard(PipelineTestbench& tb) {
     // This requires a stall cycle
     printf("Test 4: Load-use hazard (requires stall)\n");
     printf("  Program: load DMEM[3]=42 into x4, add x4+x1, store to DMEM[4]\n");
-    
+
     tb.clear_imem();
     tb.clear_dmem();
     tb.write_dmem(3, 42);  // Pre-initialize DMEM[3]
-    
+
     // Verify DMEM[3] was written
     uint32_t check = tb.read_dmem(3);
     printf("  DMEM[3] pre-init check = %u (expected 42)\n", check);
-    
+
     tb.write_imem(0, 0x00500093);  // ADDI x1, x0, 5
     tb.write_imem(1, 0x00C02203);  // LW   x4, 12(x0)    # x4 = DMEM[3] = 42
     tb.write_imem(2, 0x001202B3);  // ADD  x5, x4, x1    # x5 = 42 + 5 = 47 (load-use!)
     tb.write_imem(3, 0x00502823);  // SW   x5, 16(x0)    # DMEM[4] = 47
     tb.write_imem(4, 0x00000063);  // BEQ  x0, x0, 0
-    
+
     tb.reset_cpu();
     tb.start_cpu();
     tb.run_cycles(30);
     tb.stop_cpu();
-    
+
     uint32_t dmem4 = tb.read_dmem(4);
     printf("  DMEM[4] = %u (expected 47)\n", dmem4);
-    
+
     if (dmem4 != 47) {
         printf("  FAILED!\n\n");
         return 1;
@@ -272,10 +272,10 @@ int test_back_to_back_stores(PipelineTestbench& tb) {
     // Test: Multiple consecutive store instructions
     printf("Test 5: Back-to-back stores\n");
     printf("  Program: SW x1,x2,x3 to DMEM[5,6,7]\n");
-    
+
     tb.clear_imem();
     tb.clear_dmem();
-    
+
     tb.write_imem(0, 0x00500093);  // ADDI x1, x0, 5
     tb.write_imem(1, 0x00300113);  // ADDI x2, x0, 3
     tb.write_imem(2, 0x00800193);  // ADDI x3, x0, 8
@@ -283,24 +283,24 @@ int test_back_to_back_stores(PipelineTestbench& tb) {
     tb.write_imem(4, 0x00202C23);  // SW   x2, 24(x0)   # DMEM[6] = 3
     tb.write_imem(5, 0x00302E23);  // SW   x3, 28(x0)   # DMEM[7] = 8
     tb.write_imem(6, 0x00000063);  // BEQ  x0, x0, 0
-    
+
     tb.reset_cpu();
     tb.start_cpu();
     tb.run_cycles(30);
     tb.stop_cpu();
-    
+
     uint32_t dmem5 = tb.read_dmem(5);
     uint32_t dmem6 = tb.read_dmem(6);
     uint32_t dmem7 = tb.read_dmem(7);
     printf("  DMEM[5] = %u (expected 5)\n", dmem5);
     printf("  DMEM[6] = %u (expected 3)\n", dmem6);
     printf("  DMEM[7] = %u (expected 8)\n", dmem7);
-    
+
     int errors = 0;
     if (dmem5 != 5) errors++;
     if (dmem6 != 3) errors++;
     if (dmem7 != 8) errors++;
-    
+
     if (errors) {
         printf("  FAILED!\n\n");
         return errors;
@@ -313,23 +313,23 @@ int test_store_address_forwarding(PipelineTestbench& tb) {
     // Test: Store where BASE ADDRESS comes from forwarding
     printf("Test 6: Store with forwarded base address\n");
     printf("  Program: x6=4, x7=99, SW x7,0(x6) -> DMEM[1]=99\n");
-    
+
     tb.clear_imem();
     tb.clear_dmem();
-    
+
     tb.write_imem(0, 0x00400313);  // ADDI x6, x0, 4     # x6 = 4
     tb.write_imem(1, 0x06300393);  // ADDI x7, x0, 99    # x7 = 99
     tb.write_imem(2, 0x00732023);  // SW   x7, 0(x6)     # DMEM[1] = 99
     tb.write_imem(3, 0x00000063);  // BEQ  x0, x0, 0
-    
+
     tb.reset_cpu();
     tb.start_cpu();
     tb.run_cycles(25);
     tb.stop_cpu();
-    
+
     uint32_t dmem1 = tb.read_dmem(1);
     printf("  DMEM[1] = %u (expected 99)\n", dmem1);
-    
+
     if (dmem1 != 99) {
         printf("  FAILED!\n\n");
         return 1;
@@ -342,23 +342,23 @@ int test_x0_writes_ignored(PipelineTestbench& tb) {
     // Test: Writes to x0 should be ignored, x0 always reads 0
     printf("Test 7: x0 writes ignored\n");
     printf("  Program: ADDI x0,100 (ignored), SW x0 to DMEM[0]\n");
-    
+
     tb.clear_imem();
     tb.clear_dmem();
     tb.write_dmem(0, 0xDEADBEEF);  // Pre-fill with garbage
-    
+
     tb.write_imem(0, 0x06400013);  // ADDI x0, x0, 100   # x0 should stay 0
     tb.write_imem(1, 0x00002023);  // SW   x0, 0(x0)     # DMEM[0] = 0
     tb.write_imem(2, 0x00000063);  // BEQ  x0, x0, 0
-    
+
     tb.reset_cpu();
     tb.start_cpu();
     tb.run_cycles(25);
     tb.stop_cpu();
-    
+
     uint32_t dmem0 = tb.read_dmem(0);
     printf("  DMEM[0] = %u (expected 0)\n", dmem0);
-    
+
     if (dmem0 != 0) {
         printf("  FAILED!\n\n");
         return 1;
@@ -373,14 +373,14 @@ int test_x0_writes_ignored(PipelineTestbench& tb) {
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
-    
+
     PipelineTestbench tb;
     int total_errors = 0;
-    
+
     printf("================================================================\n");
     printf("Pipeline Corner Case Testbench\n");
     printf("================================================================\n\n");
-    
+
     total_errors += test_store_forwarding_mem(tb);
     total_errors += test_store_forwarding_wb(tb);
     total_errors += test_store_no_forwarding(tb);
@@ -388,7 +388,7 @@ int main(int argc, char** argv) {
     total_errors += test_back_to_back_stores(tb);
     total_errors += test_store_address_forwarding(tb);
     total_errors += test_x0_writes_ignored(tb);
-    
+
     printf("================================================================\n");
     if (total_errors == 0) {
         printf("ALL TESTS PASSED\n");
@@ -396,6 +396,6 @@ int main(int argc, char** argv) {
         printf("FAILED: %d error(s)\n", total_errors);
     }
     printf("================================================================\n");
-    
+
     return total_errors ? 1 : 0;
 }
