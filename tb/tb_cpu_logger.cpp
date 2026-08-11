@@ -10,12 +10,12 @@
 // Logging stops naturally when the CPU halts (e.g., on EBREAK) since no more
 // memory transactions occur.
 //
-// Log Entry Format (96 bits):
-//   [95:64] - data      (32 bits)
-//   [63:32] - timestamp (32 bits - full cycle count)
-//   [31:20] - reserved  (12 bits)
-//   [19:2]  - address   (18 bits - word-aligned)
-//   [1:0]   - type      (00=IFETCH, 01=DLOAD, 10=DSTORE)
+// Log Entry Format (128 bits):
+//   [127:96] - data      (32 bits)
+//   [95:32]  - timestamp (64 bits)
+//   [31:20]  - reserved  (12 bits)
+//   [19:2]   - address   (18 bits - word-aligned)
+//   [1:0]    - type      (00=IFETCH, 01=DLOAD, 10=DSTORE)
 //
 // Control Register (at 0x5008):
 //   [0] = log_enable (default 1)
@@ -85,7 +85,8 @@ public:
         dut->imem_valid = 1;
         tick();
         dut->imem_valid = 0;
-        // Need extra tick for registered IMEM path
+        // Extra ticks: 1 for IMEM data path, 1 for pipeline to memory
+        tick();
         tick();
     }
     
@@ -95,6 +96,8 @@ public:
         dut->dmem_ren = 1;
         tick();
         dut->dmem_ren = 0;
+        // Extra tick for pipeline to memory
+        tick();
     }
     
     void dmem_write(uint32_t addr, uint32_t data) {
@@ -103,30 +106,31 @@ public:
         dut->dmem_wen = 1;
         tick();
         dut->dmem_wen = 0;
+        // Extra tick for pipeline to memory
+        tick();
     }
     
     void print_log_entry(int idx) {
         dut->log_idx = idx;
         dut->eval();
         
-        // Parse 96-bit log entry (Verilator splits into 3x32-bit array)
-        // New format:
-        //   [95:64] - data      (w2)
-        //   [63:32] - timestamp (w1)
-        //   [31:20] - reserved
-        //   [19:2]  - address   (18 bits)
-        //   [1:0]   - type
-        uint32_t w0 = dut->log_entry[0];    // [31:0]
-        uint32_t w1 = dut->log_entry[1];    // [63:32]
-        uint32_t w2 = dut->log_entry[2];    // [95:64]
+        // Parse 128-bit log entry (Verilator splits into 4x32-bit array)
+        // [127:96] = w3 = data
+        // [95:64]  = w2 = timestamp[63:32]
+        // [63:32]  = w1 = timestamp[31:0]
+        // [31:0]   = w0 = reserved[31:20], address[19:2], type[1:0]
+        uint32_t w0 = dut->log_entry[0];
+        uint32_t w1 = dut->log_entry[1];
+        uint32_t w2 = dut->log_entry[2];
+        uint32_t w3 = dut->log_entry[3];
         
         uint8_t type = w0 & 0x3;
         uint32_t addr = ((w0 >> 2) & 0x3FFFF) << 2;  // Word address to byte address
-        uint32_t timestamp = w1;
-        uint32_t data = w2;
+        uint64_t timestamp = ((uint64_t)w2 << 32) | w1;
+        uint32_t data = w3;
         
         const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
-        printf("  [%2d] cycle=%u %s addr=0x%05X data=0x%08X\n",
+        printf("  [%2d] cycle=%lu %s addr=0x%05X data=0x%08X\n",
                idx, timestamp, type_names[type], addr, data);
     }
     
@@ -247,9 +251,9 @@ int main(int argc, char** argv) {
     }
     
     // -------------------------------------------------------------------------
-    // Test 4: Verify 32-bit timestamp
+    // Test 4: Verify 64-bit timestamp
     // -------------------------------------------------------------------------
-    printf("\nTest 4: 32-bit timestamp\n");
+    printf("\nTest 4: 64-bit timestamp\n");
     printf("------------------------\n");
     
     tb.clear_log();
@@ -257,18 +261,18 @@ int main(int argc, char** argv) {
     // Do a transaction
     tb.dmem_write(0x00001000, 0x12345678);
     
-    // Check the timestamp is reasonable (should be close to current cycle)
+    // Check the timestamp is reasonable
     tb.dut->log_idx = 0;
     tb.dut->eval();
-    uint32_t timestamp = tb.dut->log_entry[1];  // [63:32]
+    uint64_t timestamp = ((uint64_t)tb.dut->log_entry[2] << 32) | tb.dut->log_entry[1];
     uint32_t current_cycle = tb.dut->log_cycle;
     
-    printf("Timestamp in log: %u\n", timestamp);
+    printf("Timestamp in log: %lu\n", timestamp);
     printf("Current cycle:    %u\n", current_cycle);
     
     // Timestamp should be within a few cycles of current
     if (timestamp > 0 && timestamp <= current_cycle) {
-        printf("PASS: 32-bit timestamp working\n");
+        printf("PASS: 64-bit timestamp working\n");
     } else {
         printf("ERROR: Timestamp looks wrong!\n");
         errors++;

@@ -831,9 +831,16 @@ module riscv_soc (
     //
     // Accessible at addr 0x5xxx:
     //   0x5000 = log_count (RO), 0x5004 = log_cycle (RO)
-    //   0x5008 = control: [0]=enable, [1]=clear
-    //   0x5010 = entry[0] bits[31:0],  0x5014 = entry[0] bits[63:32], 0x5018 = entry[0] bits[95:64]
-    //   0x5020 = entry[1] bits[31:0],  etc.
+    //   0x5008 = control: [0]=enable, [1]=clear, [2]=log_imem
+    //   0x5010 = entry[0][31:0], 0x5014 = entry[0][63:32], 0x5018 = entry[0][95:64], 0x501C = entry[0][127:96]
+    //   0x5020 = entry[1][31:0], etc.
+    //
+    // Entry format (128 bits):
+    //   [127:96] - data      (32 bits)
+    //   [95:32]  - timestamp (64 bits)
+    //   [31:20]  - reserved  (12 bits)
+    //   [19:2]   - address   (18 bits)
+    //   [1:0]    - type      (00=IFETCH, 01=DLOAD, 10=DSTORE)
 
     // CPU logger control register
     // Control bits: [0]=enable, [1]=clear (auto-clears), [2]=log_imem
@@ -861,13 +868,13 @@ module riscv_soc (
         end
     end
 
-    wire [4:0]  cpu_log_idx = addr[8:4] - 5'd1;  // Entry 0 at 0x5010, entry 1 at 0x5020
-    wire [95:0] cpu_log_entry;
-    wire [31:0] cpu_log_count;
-    wire [31:0] cpu_log_cycle;
+    wire [7:0]   cpu_log_idx = addr[11:4] - 8'd1;  // Entry 0 at 0x5010, entry 1 at 0x5020, ... entry 255 at 0x5FF0
+    wire [127:0] cpu_log_entry;
+    wire [31:0]  cpu_log_count;
+    wire [31:0]  cpu_log_cycle;
 
     cpu_logger #(
-        .LOG_DEPTH(32)
+        .LOG_DEPTH(256)
     ) u_cpu_logger (
         .clk        (clk),
         .rst_n      (rst_n),
@@ -908,12 +915,12 @@ module riscv_soc (
                 default: cpu_logger_rdata = 32'h0;
             endcase
         end else begin
-            // Log entries at 0x5010, 0x5020, etc.
+            // Log entries at 0x5010, 0x5020, etc. (128 bits = 4 words each)
             case (addr[3:2])
                 2'd0: cpu_logger_rdata = cpu_log_entry[31:0];
                 2'd1: cpu_logger_rdata = cpu_log_entry[63:32];
                 2'd2: cpu_logger_rdata = cpu_log_entry[95:64];
-                default: cpu_logger_rdata = 32'h0;
+                2'd3: cpu_logger_rdata = cpu_log_entry[127:96];
             endcase
         end
     end
