@@ -233,7 +233,7 @@ static void cpulog_read_entry(int idx, cpulog_entry_t *entry) {
   uint32_t w2 = read32(base + 8);
 
   entry->type = w0 & 0x3;
-  entry->address = ((w0 >> 2) & 0x3FFFF) << 2; // Convert to byte address
+  entry->address = ((w0 >> 2) & 0x3FFFF) << 2;
   entry->timestamp = w1;
   entry->data = w2;
 }
