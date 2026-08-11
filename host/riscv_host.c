@@ -42,14 +42,20 @@
 // CPU Logger registers (at BAR_CPULOG)
 #define CPULOG_COUNT  0x0000   // Total transactions logged (RO)
 #define CPULOG_CYCLE  0x0004   // Current cycle counter (RO)
-#define CPULOG_CTRL   0x0008   // [0]=enable, [1]=clear, [2]=log_imem, [3]=ebreak_hit(RO)
+#define CPULOG_CTRL   0x0008   // [0]=enable, [1]=clear, [2]=log_imem
 #define CPULOG_ENTRY0 0x0010   // Entry[0] (96 bits = 3 words)
+
+// Log entry format (96 bits):
+//   [95:64] - data      (32 bits)
+//   [63:32] - timestamp (32 bits - full cycle count)
+//   [31:20] - reserved  (12 bits)
+//   [19:2]  - address   (18 bits - word-aligned)
+//   [1:0]   - type      (00=IFETCH, 01=DLOAD, 10=DSTORE)
 
 // Log entry types
 #define LOG_TYPE_IFETCH  0
 #define LOG_TYPE_DLOAD   1
 #define LOG_TYPE_DSTORE  2
-#define LOG_TYPE_EBREAK  3
 
 // Control bits
 #define CTRL_RUN      (1 << 0)
@@ -807,17 +813,25 @@ int main(int argc, char *argv[]) {
         // Read up to 8 entries
         int entries_to_read = (cpulog_count < 8) ? cpulog_count : 8;
         for (int i = 0; i < entries_to_read; i++) {
+            // New entry format (96 bits):
+            //   [95:64] - data      (w2)
+            //   [63:32] - timestamp (w1)
+            //   [31:20] - reserved
+            //   [19:2]  - address   (18 bits)
+            //   [1:0]   - type
             uint32_t entry_base = BAR_CPULOG + CPULOG_ENTRY0 + (i * 0x10);
-            uint32_t type_time = read32(entry_base + 0);
-            uint32_t addr = read32(entry_base + 4);
-            uint32_t data = read32(entry_base + 8);
+            uint32_t w0 = read32(entry_base + 0);   // [31:0]  - type + addr
+            uint32_t w1 = read32(entry_base + 4);   // [63:32] - timestamp
+            uint32_t w2 = read32(entry_base + 8);   // [95:64] - data
             
-            uint8_t type = type_time & 0x3;
-            uint16_t timestamp = (type_time >> 16) & 0xFFFF;
+            uint8_t type = w0 & 0x3;
+            uint32_t addr = (w0 >> 2) & 0x3FFFF;    // 18-bit word address
+            uint32_t timestamp = w1;                 // Full 32-bit timestamp
+            uint32_t data = w2;
             
             const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
-            printf("    [%d] cycle=%4u %s addr=0x%08X data=0x%08X\n",
-                   i, timestamp, type_names[type], addr, data);
+            printf("    [%d] cycle=%u %s addr=0x%05X data=0x%08X\n",
+                   i, timestamp, type_names[type], addr << 2, data);
         }
         
         // With log_imem=0, we should only see DSTORE (type=2) and DLOAD (type=1)
@@ -825,8 +839,8 @@ int main(int argc, char *argv[]) {
         int found_stores = 0, found_loads = 0;
         for (int i = 0; i < entries_to_read; i++) {
             uint32_t entry_base = BAR_CPULOG + CPULOG_ENTRY0 + (i * 0x10);
-            uint32_t type_time = read32(entry_base + 0);
-            uint8_t type = type_time & 0x3;
+            uint32_t w0 = read32(entry_base + 0);
+            uint8_t type = w0 & 0x3;
             if (type == 1) found_loads++;
             if (type == 2) found_stores++;
         }

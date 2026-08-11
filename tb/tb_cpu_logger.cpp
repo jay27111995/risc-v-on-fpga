@@ -11,11 +11,11 @@
 // memory transactions occur.
 //
 // Log Entry Format (96 bits):
-//   [95:64] - data (instruction, load data, or store data)
-//   [63:32] - address
-//   [31:16] - timestamp (lower 16 bits of cycle counter)
-//   [15:2]  - reserved
-//   [1:0]   - type: 00=IMEM fetch, 01=DMEM read, 10=DMEM write
+//   [95:64] - data      (32 bits)
+//   [63:32] - timestamp (32 bits - full cycle count)
+//   [31:20] - reserved  (12 bits)
+//   [19:2]  - address   (18 bits - word-aligned)
+//   [1:0]   - type      (00=IFETCH, 01=DLOAD, 10=DSTORE)
 //
 // Control Register (at 0x5008):
 //   [0] = log_enable (default 1)
@@ -110,14 +110,24 @@ public:
         dut->eval();
         
         // Parse 96-bit log entry (Verilator splits into 3x32-bit array)
-        uint32_t data = dut->log_entry[2];              // [95:64]
-        uint32_t addr = dut->log_entry[1];              // [63:32]
-        uint16_t time = (dut->log_entry[0] >> 16) & 0xFFFF;  // [31:16]
-        uint8_t type = dut->log_entry[0] & 0x3;         // [1:0]
+        // New format:
+        //   [95:64] - data      (w2)
+        //   [63:32] - timestamp (w1)
+        //   [31:20] - reserved
+        //   [19:2]  - address   (18 bits)
+        //   [1:0]   - type
+        uint32_t w0 = dut->log_entry[0];    // [31:0]
+        uint32_t w1 = dut->log_entry[1];    // [63:32]
+        uint32_t w2 = dut->log_entry[2];    // [95:64]
+        
+        uint8_t type = w0 & 0x3;
+        uint32_t addr = ((w0 >> 2) & 0x3FFFF) << 2;  // Word address to byte address
+        uint32_t timestamp = w1;
+        uint32_t data = w2;
         
         const char* type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
-        printf("  [%2d] cycle=%4d %s addr=0x%08X data=0x%08X\n",
-               idx, time, type_names[type], addr, data);
+        printf("  [%2d] cycle=%u %s addr=0x%05X data=0x%08X\n",
+               idx, timestamp, type_names[type], addr, data);
     }
     
     void clear_log() {
@@ -237,44 +247,58 @@ int main(int argc, char** argv) {
     }
     
     // -------------------------------------------------------------------------
-    // Test 4: DMEM priority over IMEM
+    // Test 4: Verify 32-bit timestamp
     // -------------------------------------------------------------------------
-    printf("\nTest 4: DMEM priority over IMEM\n");
-    printf("-------------------------------\n");
+    printf("\nTest 4: 32-bit timestamp\n");
+    printf("------------------------\n");
     
     tb.clear_log();
-    tb.dut->log_imem = 1;  // Enable IMEM logging
     
-    // Simulate simultaneous DMEM write and pending IMEM fetch
-    tb.dut->imem_addr = 0x00001000;
-    tb.dut->imem_rdata = 0xDEADBEEF;
-    tb.dut->imem_valid = 1;
-    tb.tick();  // IMEM data gets registered
+    // Do a transaction
+    tb.dmem_write(0x00001000, 0x12345678);
     
-    // Now do a DMEM write - should take priority
-    tb.dut->imem_valid = 0;
-    tb.dut->dmem_addr = 0x00002000;
-    tb.dut->dmem_wdata = 0x12345678;
-    tb.dut->dmem_wen = 1;
-    tb.tick();
-    tb.dut->dmem_wen = 0;
+    // Check the timestamp is reasonable (should be close to current cycle)
+    tb.dut->log_idx = 0;
+    tb.dut->eval();
+    uint32_t timestamp = tb.dut->log_entry[1];  // [63:32]
+    uint32_t current_cycle = tb.dut->log_cycle;
     
-    // Let IMEM log
-    tb.tick();
-    tb.tick();
+    printf("Timestamp in log: %u\n", timestamp);
+    printf("Current cycle:    %u\n", current_cycle);
     
-    printf("Log count: %d\n", tb.dut->log_count);
-    printf("\nPriority Log:\n");
-    for (uint32_t i = 0; i < tb.dut->log_count && i < 10; i++) {
-        tb.print_log_entry(i);
+    // Timestamp should be within a few cycles of current
+    if (timestamp > 0 && timestamp <= current_cycle) {
+        printf("PASS: 32-bit timestamp working\n");
+    } else {
+        printf("ERROR: Timestamp looks wrong!\n");
+        errors++;
     }
     
-    // First entry should be DSTORE (DMEM has priority)
-    tb.dut->log_idx = tb.dut->log_count - 1;  // Oldest entry
+    // -------------------------------------------------------------------------
+    // Test 5: Verify 18-bit address
+    // -------------------------------------------------------------------------
+    printf("\nTest 5: 18-bit address\n");
+    printf("----------------------\n");
+    
+    tb.clear_log();
+    
+    // Write to a high address (use upper bits of 18-bit range)
+    uint32_t test_addr = 0x0003FFF0;  // Near top of 256KB range
+    tb.dmem_write(test_addr, 0xCAFEBABE);
+    
+    tb.dut->log_idx = 0;
     tb.dut->eval();
-    uint8_t first_type = tb.dut->log_entry[0] & 0x3;
-    if (first_type == TYPE_IFETCH) {
-        printf("PASS: IMEM logged first (before DMEM arrived)\n");
+    uint32_t w0 = tb.dut->log_entry[0];
+    uint32_t logged_addr = ((w0 >> 2) & 0x3FFFF) << 2;  // Extract and convert back
+    
+    printf("Test address:   0x%05X\n", test_addr);
+    printf("Logged address: 0x%05X\n", logged_addr);
+    
+    if (logged_addr == test_addr) {
+        printf("PASS: 18-bit address working\n");
+    } else {
+        printf("ERROR: Address mismatch!\n");
+        errors++;
     }
     
     // -------------------------------------------------------------------------

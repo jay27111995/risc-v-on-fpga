@@ -15,11 +15,11 @@
 //   log_imem   - when high, log instruction fetches; when low, DMEM only
 //
 // Log entry format (96 bits):
-//   [95:64] - data (instruction, load data, or store data)
-//   [63:32] - address
-//   [31:16] - timestamp (lower 16 bits of cycle counter)
-//   [15:2]  - reserved
-//   [1:0]   - type: 00=IMEM fetch, 01=DMEM read, 10=DMEM write
+//   [95:64] - data      (32 bits - instruction, load data, or store data)
+//   [63:32] - timestamp (32 bits - full cycle counter)
+//   [31:20] - reserved  (12 bits)
+//   [19:2]  - address   (18 bits - supports up to 256KB)
+//   [1:0]   - type      (2 bits - 00=IFETCH, 01=DLOAD, 10=DSTORE)
 //
 // ============================================================================
 
@@ -66,7 +66,7 @@ module cpu_logger #(
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
-            cycle_cnt <= 32'h0;
+            cycle_cnt <= '0;
         else
             cycle_cnt <= cycle_cnt + 1;
     end
@@ -81,30 +81,24 @@ module cpu_logger #(
     logic [31:0] imem_addr_r;
     logic [31:0] imem_rdata_r;
     logic        imem_valid_r;
-    logic [15:0] imem_timestamp_r;
+    logic [31:0] imem_timestamp_r;
     
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            imem_addr_r <= 32'h0;
-            imem_rdata_r <= 32'h0;
+            imem_addr_r <= '0;
+            imem_rdata_r <= '0;
             imem_valid_r <= 1'b0;
-            imem_timestamp_r <= 16'h0;
+            imem_timestamp_r <= '0;
         end else begin
             imem_addr_r <= imem_addr;
             imem_rdata_r <= imem_rdata;
             imem_valid_r <= imem_valid;
-            imem_timestamp_r <= cycle_cnt[15:0];
+            imem_timestamp_r <= cycle_cnt;
         end
     end
     
-    // Track previous fetch address to avoid logging same fetch repeatedly
-    logic [31:0] prev_imem_addr;
-    logic        prev_imem_valid;
-    
-    // IMEM fetch is loggable: new address and IMEM logging enabled
-    wire imem_is_new_fetch = imem_valid_r && 
-                             (imem_addr_r != prev_imem_addr || !prev_imem_valid);
-    wire imem_log_this = log_imem && imem_is_new_fetch;
+    // IMEM fetch is loggable when valid and IMEM logging enabled
+    wire imem_log_this = log_imem && imem_valid_r;
     
     // =========================================================================
     // Transaction Log
@@ -117,28 +111,19 @@ module cpu_logger #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             log_wr_ptr <= '0;
-            trans_count <= 32'h0;
-            prev_imem_addr <= 32'hFFFFFFFF;
-            prev_imem_valid <= 1'b0;
+            trans_count <= '0;
         end else if (log_clear) begin
             log_wr_ptr <= '0;
-            trans_count <= 32'h0;
-            prev_imem_addr <= 32'hFFFFFFFF;
-            prev_imem_valid <= 1'b0;
+            trans_count <= '0;
         end else if (log_enable) begin
-            // Update previous IMEM tracking
-            prev_imem_valid <= imem_valid_r;
-            if (imem_valid_r)
-                prev_imem_addr <= imem_addr_r;
-            
             // Priority: DMEM write > DMEM read > IMEM fetch
             if (dmem_wen) begin
                 // Log DMEM write (store) - highest priority
                 log_mem[log_wr_ptr] <= {
                     dmem_wdata,             // [95:64] - store data
-                    dmem_addr,              // [63:32] - address
-                    cycle_cnt[15:0],        // [31:16] - timestamp
-                    14'h0,                  // [15:2]  - reserved
+                    cycle_cnt,              // [63:32] - timestamp (full 32-bit)
+                    12'h0,                  // [31:20] - reserved
+                    dmem_addr[19:2],        // [19:2]  - address (word-aligned, 18 bits)
                     TYPE_DMEM_WRITE         // [1:0]   - type
                 };
                 log_wr_ptr <= log_wr_ptr + 1;
@@ -147,9 +132,9 @@ module cpu_logger #(
                 // Log DMEM read (load) - second priority
                 log_mem[log_wr_ptr] <= {
                     dmem_rdata,             // [95:64] - load data
-                    dmem_addr,              // [63:32] - address
-                    cycle_cnt[15:0],        // [31:16] - timestamp
-                    14'h0,                  // [15:2]  - reserved
+                    cycle_cnt,              // [63:32] - timestamp (full 32-bit)
+                    12'h0,                  // [31:20] - reserved
+                    dmem_addr[19:2],        // [19:2]  - address (word-aligned, 18 bits)
                     TYPE_DMEM_READ          // [1:0]   - type
                 };
                 log_wr_ptr <= log_wr_ptr + 1;
@@ -158,9 +143,9 @@ module cpu_logger #(
                 // Log IMEM fetch - lowest priority (uses registered data)
                 log_mem[log_wr_ptr] <= {
                     imem_rdata_r,           // [95:64] - instruction
-                    imem_addr_r,            // [63:32] - PC
-                    imem_timestamp_r,       // [31:16] - timestamp
-                    14'h0,                  // [15:2]  - reserved
+                    imem_timestamp_r,       // [63:32] - timestamp (from when fetch happened)
+                    12'h0,                  // [31:20] - reserved
+                    imem_addr_r[19:2],      // [19:2]  - address (word-aligned, 18 bits)
                     TYPE_IMEM_FETCH         // [1:0]   - type
                 };
                 log_wr_ptr <= log_wr_ptr + 1;
