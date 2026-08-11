@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Build the host program
-gcc -O2 -Wall -o riscv_host riscv_host.c
+gcc -O2 -Wall -c pcie_vfio.c -o pcie_vfio.o
+gcc -O2 -Wall -c riscv_host.c -o riscv_host.o
+gcc -O2 -Wall pcie_vfio.o riscv_host.o -o riscv_host
 echo "Built: riscv_host"
 echo ""
 
