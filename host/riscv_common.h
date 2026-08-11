@@ -306,7 +306,12 @@ static inline int load_program_file(const char *filename) {
     return -1;
   }
 
-  fread(prog, 1, size, f);
+  if (fread(prog, 1, size, f) != (size_t)size) {
+    printf("  ERROR: Failed to read %s\n", filename);
+    free(prog);
+    fclose(f);
+    return -1;
+  }
   fclose(f);
 
   for (long i = 0; i < size / 4; i++) {
