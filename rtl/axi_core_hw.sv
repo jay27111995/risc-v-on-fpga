@@ -298,9 +298,13 @@ module axi_core_hw(
 
   // Sniffer log read data mux (addr 0x4xxx)
   // 0x4000 = log_count, 0x4004 = log_cycle, 0x4008 = control
-  // 0x4010 = entry[0] bits[31:0],   0x4014 = entry[0] bits[63:32],
-  // 0x4018 = entry[0] bits[95:64],  0x401C = entry[0] bits[127:96]
-  // 0x4020 = entry[1] bits[31:0],   etc.
+  // 0x4010 = entry[0][31:0], 0x4014 = entry[0][63:32], 0x4018 = entry[0][95:64], 0x401C = entry[0][127:96]
+  // Entry format (128 bits):
+  //   [127:96] - data      (32 bits)
+  //   [95:32]  - timestamp (64 bits)
+  //   [31:20]  - reserved  (12 bits)
+  //   [19:1]   - address   (19 bits)
+  //   [0]      - type      (0=read, 1=write)
   logic [31:0] sniffer_rdata;
   always_comb begin
     if (soc_addr[7:4] == 4'h0) begin
@@ -312,7 +316,7 @@ module axi_core_hw(
         default: sniffer_rdata = 32'h0;
       endcase
     end else begin
-      // Log entries (addr[7:4] - 1 = log index, addr[3:2] = word within entry)
+      // Log entries (128 bits = 4 words each)
       case (soc_addr[3:2])
         2'd0: sniffer_rdata = sniffer_log_entry[31:0];
         2'd1: sniffer_rdata = sniffer_log_entry[63:32];

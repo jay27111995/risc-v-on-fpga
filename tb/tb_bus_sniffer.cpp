@@ -10,11 +10,11 @@
 // debugging PCIe BAR accesses to the SoC.
 //
 // Log Entry Format (128 bits):
-//   [127:96] - Write/read data
-//   [95:64]  - Reserved
-//   [63:48]  - Address[15:0]
-//   [47:32]  - Timestamp (cycle counter)
-//   [0]      - Type (0=read, 1=write)
+//   [127:96] - data      (32 bits)
+//   [95:32]  - timestamp (64 bits)
+//   [31:20]  - reserved  (12 bits)
+//   [19:1]   - address   (19 bits)
+//   [0]      - type      (0=read, 1=write)
 //
 // ============================================================================
 
@@ -100,13 +100,22 @@ public:
         dut->eval();
         
         // Parse 128-bit log entry (Verilator splits into 4x32-bit array)
-        uint32_t data = dut->log_entry[3];              // [127:96]
-        uint16_t addr = (dut->log_entry[1] >> 16) & 0xFFFF;  // [63:48]
-        uint16_t time = (dut->log_entry[0] >> 16) & 0xFFFF;  // [31:16]
-        bool is_write = dut->log_entry[0] & 1;          // [0]
+        // [127:96] = w3 = data
+        // [95:64]  = w2 = timestamp[63:32]
+        // [63:32]  = w1 = timestamp[31:0]
+        // [31:0]   = w0 = reserved[31:20], address[19:1], type[0]
+        uint32_t w0 = dut->log_entry[0];
+        uint32_t w1 = dut->log_entry[1];
+        uint32_t w2 = dut->log_entry[2];
+        uint32_t w3 = dut->log_entry[3];
         
-        printf("  [%d] cycle=%3d addr=0x%04X %s data=0x%08X\n",
-               idx, time, addr, is_write ? "WR" : "RD", data);
+        bool is_write = w0 & 1;
+        uint32_t addr = (w0 >> 1) & 0x7FFFF;
+        uint64_t timestamp = ((uint64_t)w2 << 32) | w1;
+        uint32_t data = w3;
+        
+        printf("  [%d] cycle=%lu %s addr=0x%05X data=0x%08X\n",
+               idx, timestamp, is_write ? "WR" : "RD", addr, data);
     }
     
     void clear_log() {
@@ -137,6 +146,9 @@ int main(int argc, char** argv) {
     tb.write(0x0008, 0xCCCCCCCC);
     tb.read(0x0004);
     tb.read(0x0008);
+    
+    // Extra tick for pipeline flush
+    tb.tick();
     
     printf("\nLog count: %d (expected 6)\n", tb.dut->log_count);
     printf("Current cycle: %d\n\n", tb.dut->log_cycle);

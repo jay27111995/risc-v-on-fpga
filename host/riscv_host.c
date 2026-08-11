@@ -47,6 +47,10 @@
 #define CTRL_RUN (1 << 0)
 #define CTRL_RESET (1 << 1)
 
+// Clock frequency (250 MHz = 4ns per cycle)
+#define CLOCK_PERIOD_NS 4
+#define CYCLES_TO_NS(c) ((c) * CLOCK_PERIOD_NS)
+
 // ----------------------------------------------------------------------------
 // Bus Sniffer Registers (host transaction logger)
 // ----------------------------------------------------------------------------
@@ -71,29 +75,27 @@
 
 // Bus sniffer entry (host transactions)
 // Format: 128 bits
-//   [15:0]   - reserved
-//   [31:16]  - timestamp (16 bits)
-//   [47:32]  - reserved
-//   [63:48]  - address (16 bits)
-//   [95:64]  - reserved
-//   [127:96] - data (32 bits)
-//   [0]      - type (0=read, 1=write)
+//   [127:96] - data      (32 bits)
+//   [95:32]  - timestamp (64 bits)
+//   [31:20]  - reserved  (12 bits)
+//   [19:1]   - address   (19 bits)
+//   [0]      - type      (0=read, 1=write)
 typedef struct {
-  uint32_t timestamp;
+  uint64_t timestamp;
   uint32_t address;
   uint32_t data;
   int is_write;
 } sniffer_entry_t;
 
 // CPU logger entry (CPU memory accesses)
-// Format: 96 bits
-//   [1:0]   - type (00=IFETCH, 01=DLOAD, 10=DSTORE)
-//   [19:2]  - address (18 bits, word-aligned)
-//   [31:20] - reserved
-//   [63:32] - timestamp (32 bits)
-//   [95:64] - data (32 bits)
+// Format: 128 bits
+//   [127:96] - data      (32 bits)
+//   [95:32]  - timestamp (64 bits)
+//   [31:20]  - reserved  (12 bits)
+//   [19:2]   - address   (18 bits, word-aligned)
+//   [1:0]    - type      (00=IFETCH, 01=DLOAD, 10=DSTORE)
 typedef struct {
-  uint32_t timestamp;
+  uint64_t timestamp;
   uint32_t address;
   uint32_t data;
   uint8_t type; // 0=IFETCH, 1=DLOAD, 2=DSTORE
@@ -177,20 +179,22 @@ static void sniffer_clear(void) {
 
 static void sniffer_read_entry(int idx, sniffer_entry_t *entry) {
   uint32_t base = BAR_SNIFFER + SNIFF_ENTRY0 + idx * 0x10;
-  uint32_t w0 = read32(base + 0x00);
-  uint32_t w1 = read32(base + 0x04);
-  uint32_t w3 = read32(base + 0x0C);
+  uint32_t w0 = read32(base + 0x0);
+  uint32_t w1 = read32(base + 0x4);
+  uint32_t w2 = read32(base + 0x8);
+  uint32_t w3 = read32(base + 0xC);
 
   entry->is_write = w0 & 1;
-  entry->timestamp = (w0 >> 16) & 0xFFFF;
-  entry->address = (w1 >> 16) & 0xFFFF;
+  entry->address = (w0 >> 1) & 0x7FFFF;
+  entry->timestamp = ((uint64_t)w2 << 32) | w1;
   entry->data = w3;
 }
 
 static void sniffer_print_entry(int idx, const sniffer_entry_t *entry) {
-  printf("    [%d] cycle=%5u %s addr=0x%05X data=0x%08X\n", idx,
-         entry->timestamp, entry->is_write ? "WR" : "RD", entry->address,
-         entry->data);
+  uint64_t ns = CYCLES_TO_NS(entry->timestamp);
+  printf("    [%2d] cycle=%10lu (%10lu ns) %s addr=0x%05X data=0x%08X\n",
+         idx, entry->timestamp, ns, entry->is_write ? "WR" : "RD",
+         entry->address, entry->data);
 }
 
 static void sniffer_dump(int max_entries) {
@@ -221,27 +225,24 @@ static void cpulog_clear(void) {
   write32(BAR_CPULOG + CPULOG_CTRL, 0x01); // enable, log_imem=0
 }
 
-static void cpulog_enable_imem(int enable) {
-  uint32_t ctrl = enable ? 0x05 : 0x01; // bit 2 = log_imem, bit 0 = enable
-  write32(BAR_CPULOG + CPULOG_CTRL, ctrl);
-}
-
 static void cpulog_read_entry(int idx, cpulog_entry_t *entry) {
   uint32_t base = BAR_CPULOG + CPULOG_ENTRY0 + idx * 0x10;
-  uint32_t w0 = read32(base + 0);
-  uint32_t w1 = read32(base + 4);
-  uint32_t w2 = read32(base + 8);
+  uint32_t w0 = read32(base + 0x0);
+  uint32_t w1 = read32(base + 0x4);
+  uint32_t w2 = read32(base + 0x8);
+  uint32_t w3 = read32(base + 0xC);
 
   entry->type = w0 & 0x3;
   entry->address = ((w0 >> 2) & 0x3FFFF) << 2;
-  entry->timestamp = w1;
-  entry->data = w2;
+  entry->timestamp = ((uint64_t)w2 << 32) | w1;
+  entry->data = w3;
 }
 
 static void cpulog_print_entry(int idx, const cpulog_entry_t *entry) {
-  printf("    [%d] cycle=%u %s addr=0x%05X data=0x%08X\n", idx,
-         entry->timestamp, cpulog_type_names[entry->type & 3], entry->address,
-         entry->data);
+  uint64_t ns = CYCLES_TO_NS(entry->timestamp);
+  printf("    [%3d] cycle=%10lu (%10lu ns) %s addr=0x%05X data=0x%08X\n",
+         idx, entry->timestamp, ns, cpulog_type_names[entry->type & 3],
+         entry->address, entry->data);
 }
 
 static void cpulog_dump(int max_entries) {
