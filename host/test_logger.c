@@ -102,7 +102,7 @@ int main(int argc, char *argv[]) {
   }
 
   count = cpulog_get_count();
-  printf("Log count: %u (expected 6: 5 IFETCH + 1 DSTORE)\n\n", count);
+  printf("Log count: %u\n\n", count);
 
   printf("CPU Log (newest first):\n");
   cpulog_dump(20);
