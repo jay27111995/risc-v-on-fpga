@@ -893,7 +893,7 @@ module riscv_soc (
         .dmem_addr  (cpu_dmem_addr),
         .dmem_wdata (cpu_dmem_wdata),
         .dmem_rdata (cpu_dmem_rdata),
-        .dmem_wen   (cpu_dmem_we),
+        .dmem_wen   (cpu_dmem_we && cpu_running),
         .dmem_ren   (mem_mem_read && mem_valid && cpu_running),
 
         // Log read interface
