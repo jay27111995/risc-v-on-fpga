@@ -41,10 +41,15 @@
 //   0x5004  LOG_CYCLE   Current cycle count (RO)
 //   0x5008  LOG_CTRL    Control: [0]=enable (RW), [1]=clear (W), [2]=log_imem (RW)
 //                       Default: enable=1, log_imem=0 (DMEM only)
-//   0x5010  ENTRY[0]    Newest log entry (3 words: data, addr, timestamp|type)
+//   0x5010  ENTRY[0]    Newest log entry (3 words)
 //   0x5020  ENTRY[1]    Second newest, etc.
 //
-// Log entry types: 00=IFETCH, 01=DLOAD, 10=DSTORE
+// Log entry format (96 bits):
+//   [95:64] - data      (32 bits)
+//   [63:32] - timestamp (32 bits - full cycle count)
+//   [31:20] - reserved  (12 bits)
+//   [19:2]  - address   (18 bits - word-aligned)
+//   [1:0]   - type      (00=IFETCH, 01=DLOAD, 10=DSTORE)
 //
 // ============================================================================
 
