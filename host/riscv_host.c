@@ -65,16 +65,45 @@
 #define CPULOG_CTRL 0x0008   // [0]=enable, [1]=clear, [2]=log_imem
 #define CPULOG_ENTRY0 0x0010 // Entry[0] (96 bits = 3 words)
 
-// Log entry format (96 bits):
-//   [95:64] - data      (32 bits)
-//   [63:32] - timestamp (32 bits - full cycle count)
-//   [31:20] - reserved  (12 bits)
-//   [19:2]  - address   (18 bits - word-aligned)
-//   [1:0]   - type      (00=IFETCH, 01=DLOAD, 10=DSTORE)
+// ----------------------------------------------------------------------------
+// Log Entry Structures
+// ----------------------------------------------------------------------------
 
-#define LOG_TYPE_IFETCH 0
-#define LOG_TYPE_DLOAD 1
-#define LOG_TYPE_DSTORE 2
+// Bus sniffer entry (host transactions)
+// Format: 128 bits
+//   [15:0]   - reserved
+//   [31:16]  - timestamp (16 bits)
+//   [47:32]  - reserved
+//   [63:48]  - address (16 bits)
+//   [95:64]  - reserved
+//   [127:96] - data (32 bits)
+//   [0]      - type (0=read, 1=write)
+typedef struct {
+  uint32_t timestamp;
+  uint32_t address;
+  uint32_t data;
+  int is_write;
+} sniffer_entry_t;
+
+// CPU logger entry (CPU memory accesses)
+// Format: 96 bits
+//   [1:0]   - type (00=IFETCH, 01=DLOAD, 10=DSTORE)
+//   [19:2]  - address (18 bits, word-aligned)
+//   [31:20] - reserved
+//   [63:32] - timestamp (32 bits)
+//   [95:64] - data (32 bits)
+typedef struct {
+  uint32_t timestamp;
+  uint32_t address;
+  uint32_t data;
+  uint8_t type; // 0=IFETCH, 1=DLOAD, 2=DSTORE
+} cpulog_entry_t;
+
+#define CPULOG_TYPE_IFETCH 0
+#define CPULOG_TYPE_DLOAD 1
+#define CPULOG_TYPE_DSTORE 2
+
+static const char *cpulog_type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
 
 // ----------------------------------------------------------------------------
 // CPU Control Functions
@@ -133,6 +162,132 @@ static void load_program(const uint32_t *program, size_t count) {
 }
 
 // ----------------------------------------------------------------------------
+// Bus Sniffer Functions
+// ----------------------------------------------------------------------------
+
+static uint32_t sniffer_get_count(void) {
+  return read32(BAR_SNIFFER + SNIFF_COUNT);
+}
+
+static void sniffer_clear(void) {
+  write32(BAR_SNIFFER + SNIFF_CTRL, 0x03); // clear + enable
+  usleep(1000);
+  write32(BAR_SNIFFER + SNIFF_CTRL, 0x01); // enable only
+}
+
+static void sniffer_read_entry(int idx, sniffer_entry_t *entry) {
+  uint32_t base = BAR_SNIFFER + SNIFF_ENTRY0 + idx * 0x10;
+  uint32_t w0 = read32(base + 0x00);
+  uint32_t w1 = read32(base + 0x04);
+  uint32_t w3 = read32(base + 0x0C);
+
+  entry->is_write = w0 & 1;
+  entry->timestamp = (w0 >> 16) & 0xFFFF;
+  entry->address = (w1 >> 16) & 0xFFFF;
+  entry->data = w3;
+}
+
+static void sniffer_print_entry(int idx, const sniffer_entry_t *entry) {
+  printf("    [%d] cycle=%5u %s addr=0x%05X data=0x%08X\n", idx,
+         entry->timestamp, entry->is_write ? "WR" : "RD", entry->address,
+         entry->data);
+}
+
+static void sniffer_dump(int max_entries) {
+  uint32_t count = sniffer_get_count();
+  if (count == 0) {
+    printf("  (no entries)\n");
+    return;
+  }
+  int n = (count < (uint32_t)max_entries) ? count : max_entries;
+  for (int i = 0; i < n; i++) {
+    sniffer_entry_t entry;
+    sniffer_read_entry(i, &entry);
+    sniffer_print_entry(i, &entry);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// CPU Logger Functions
+// ----------------------------------------------------------------------------
+
+static uint32_t cpulog_get_count(void) {
+  return read32(BAR_CPULOG + CPULOG_COUNT);
+}
+
+static void cpulog_clear(void) {
+  write32(BAR_CPULOG + CPULOG_CTRL, 0x03); // clear + enable
+  usleep(1000);
+  write32(BAR_CPULOG + CPULOG_CTRL, 0x01); // enable, log_imem=0
+}
+
+static void cpulog_enable_imem(int enable) {
+  uint32_t ctrl = enable ? 0x05 : 0x01; // bit 2 = log_imem, bit 0 = enable
+  write32(BAR_CPULOG + CPULOG_CTRL, ctrl);
+}
+
+static void cpulog_read_entry(int idx, cpulog_entry_t *entry) {
+  uint32_t base = BAR_CPULOG + CPULOG_ENTRY0 + idx * 0x10;
+  uint32_t w0 = read32(base + 0);
+  uint32_t w1 = read32(base + 4);
+  uint32_t w2 = read32(base + 8);
+
+  entry->type = w0 & 0x3;
+  entry->address = ((w0 >> 2) & 0x3FFFF) << 2; // Convert to byte address
+  entry->timestamp = w1;
+  entry->data = w2;
+}
+
+static void cpulog_print_entry(int idx, const cpulog_entry_t *entry) {
+  printf("    [%d] cycle=%u %s addr=0x%05X data=0x%08X\n", idx,
+         entry->timestamp, cpulog_type_names[entry->type & 3], entry->address,
+         entry->data);
+}
+
+static void cpulog_dump(int max_entries) {
+  uint32_t count = cpulog_get_count();
+  if (count == 0) {
+    printf("  (no entries)\n");
+    return;
+  }
+  int n = (count < (uint32_t)max_entries) ? count : max_entries;
+  for (int i = 0; i < n; i++) {
+    cpulog_entry_t entry;
+    cpulog_read_entry(i, &entry);
+    cpulog_print_entry(i, &entry);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Performance Counters
+// ----------------------------------------------------------------------------
+
+static void print_perf_counters(void) {
+  printf("=== Performance Counters ===\n");
+
+  uint32_t cycles = read32(BAR_CYCLES);
+  uint32_t instrs = read32(BAR_INSTRS);
+  uint32_t stalls = read32(BAR_STALLS);
+  uint32_t branches = read32(BAR_BRANCHES);
+  uint32_t br_taken = read32(BAR_BR_TAKEN);
+  uint32_t loads = read32(BAR_LOADS);
+  uint32_t stores = read32(BAR_STORES);
+
+  printf("  Cycles:         %u\n", cycles);
+  printf("  Instructions:   %u\n", instrs);
+  printf("  Stalls:         %u\n", stalls);
+  printf("  Branches:       %u (taken: %u)\n", branches, br_taken);
+  printf("  Loads:          %u\n", loads);
+  printf("  Stores:         %u\n", stores);
+
+  if (instrs > 0) {
+    printf("  CPI: %.2f\n", (float)cycles / instrs);
+    printf("  IPC: %.2f\n", (float)instrs / cycles);
+  }
+  printf("\n");
+}
+
+// ----------------------------------------------------------------------------
 // Test Infrastructure
 // ----------------------------------------------------------------------------
 
@@ -186,7 +341,6 @@ static int run_test_hex(const char *name, const uint32_t *program,
 // ----------------------------------------------------------------------------
 
 static int test_basic_alu(void) {
-  // x1=5, x2=3, x3=x1+x2=8, store to dmem[0]
   uint32_t prog[] = {
       0x00500093, // ADDI x1, x0, 5
       0x00300113, // ADDI x2, x0, 3
@@ -198,7 +352,6 @@ static int test_basic_alu(void) {
 }
 
 static int test_bne(void) {
-  // Count down from 5 to 0
   uint32_t prog[] = {
       0x00500093, // ADDI x1, x0, 5
       0xFFF08093, // ADDI x1, x1, -1
@@ -206,17 +359,16 @@ static int test_bne(void) {
       0x00102223, // SW   x1, 4(x0)
       0x00000063, // BEQ  x0, x0, 0
   };
-  return run_test("Test 2: BNE (count down)", prog, 5, 1, 0, "Count 5→0");
+  return run_test("Test 2: BNE (count down)", prog, 5, 1, 0, "Count 5->0");
 }
 
 static int test_blt(void) {
-  // BLT: (-5) < 3 should be true (signed)
   uint32_t prog[] = {
       0xFFB00093, // ADDI x1, x0, -5
       0x00300113, // ADDI x2, x0, 3
-      0x00100193, // ADDI x3, x0, 1 (assume taken)
+      0x00100193, // ADDI x3, x0, 1
       0x0020C463, // BLT  x1, x2, 8
-      0x00200193, // ADDI x3, x0, 2 (not taken)
+      0x00200193, // ADDI x3, x0, 2
       0x00302423, // SW   x3, 8(x0)
       0x00000063, // BEQ  x0, x0, 0
   };
@@ -224,7 +376,6 @@ static int test_blt(void) {
 }
 
 static int test_bltu(void) {
-  // BLTU: 0xFFFFFFFB < 3 should be false (unsigned)
   uint32_t prog[] = {
       0xFFB00093, // ADDI x1, x0, -5 (= 0xFFFFFFFB)
       0x00300113, // ADDI x2, x0, 3
@@ -238,7 +389,6 @@ static int test_bltu(void) {
 }
 
 static int test_bge(void) {
-  // BGE: 5 >= -3 should be true (signed)
   uint32_t prog[] = {
       0x00500093, // ADDI x1, x0, 5
       0xFFD00113, // ADDI x2, x0, -3
@@ -252,7 +402,6 @@ static int test_bge(void) {
 }
 
 static int test_bgeu(void) {
-  // BGEU: 5 >= 0xFFFFFFFD should be false (unsigned)
   uint32_t prog[] = {
       0x00500093, // ADDI x1, x0, 5
       0xFFD00113, // ADDI x2, x0, -3 (= 0xFFFFFFFD)
@@ -266,7 +415,6 @@ static int test_bgeu(void) {
 }
 
 static int test_shifts(void) {
-  // SLL, SRL, SRA
   uint32_t prog[] = {
       0x00800093, // ADDI x1, x0, 8
       0x00200113, // ADDI x2, x0, 2
@@ -302,7 +450,6 @@ static int test_shifts(void) {
 }
 
 static int test_imm_shifts(void) {
-  // SLLI, SRLI, SRAI
   uint32_t prog[] = {
       0x00100093, // ADDI x1, x0, 1
       0x01009113, // SLLI x2, x1, 16  (1 << 16 = 65536)
@@ -337,7 +484,6 @@ static int test_imm_shifts(void) {
 }
 
 static int test_slt(void) {
-  // SLT/SLTU
   uint32_t prog[] = {
       0xFFB00093, // ADDI x1, x0, -5
       0x00300113, // ADDI x2, x0, 3
@@ -368,7 +514,6 @@ static int test_slt(void) {
 }
 
 static int test_jal(void) {
-  // JAL (jump and link)
   uint32_t prog[] = {
       0x00500093, // 0x00: ADDI x1, x0, 5
       0x00C000EF, // 0x04: JAL x1, 12 (jump to 0x10, x1 = 8)
@@ -381,7 +526,6 @@ static int test_jal(void) {
 }
 
 static int test_jalr(void) {
-  // JALR (jump and link register)
   uint32_t prog[] = {
       0x00300513, // 0x00: ADDI x10, x0, 3
       0x00C000EF, // 0x04: JAL x1, 12 (call 0x10)
@@ -394,7 +538,6 @@ static int test_jalr(void) {
 }
 
 static int test_lui(void) {
-  // LUI (load upper immediate)
   uint32_t prog[] = {
       0xDEADB0B7, // LUI x1, 0xDEADB
       0x04102023, // SW  x1, 64(x0)
@@ -404,7 +547,6 @@ static int test_lui(void) {
 }
 
 static int test_auipc(void) {
-  // AUIPC (add upper immediate to PC)
   uint32_t prog[] = {
       0x00001097, // AUIPC x1, 1 (x1 = PC + 0x1000 = 0x1000)
       0x04102223, // SW    x1, 68(x0)
@@ -415,7 +557,6 @@ static int test_auipc(void) {
 }
 
 static int test_byte_ops(void) {
-  // SB/LB/LBU
   uint32_t prog[] = {
       0x0FF00093, // ADDI x1, x0, 255
       0x04800113, // ADDI x2, x0, 72
@@ -447,7 +588,6 @@ static int test_byte_ops(void) {
 }
 
 static int test_halfword_ops(void) {
-  // SH/LH/LHU
   uint32_t prog[] = {
       0xFFF00093, // ADDI x1, x0, -1
       0x05000113, // ADDI x2, x0, 80
@@ -479,16 +619,13 @@ static int test_halfword_ops(void) {
 }
 
 // ----------------------------------------------------------------------------
-// Bus Sniffer Test
+// Debug Module Tests
 // ----------------------------------------------------------------------------
 
 static int test_bus_sniffer(void) {
   printf("=== Bus Sniffer Test ===\n");
 
-  // Clear and enable
-  write32(BAR_SNIFFER + SNIFF_CTRL, 0x03); // clear + enable
-  usleep(1000);
-  write32(BAR_SNIFFER + SNIFF_CTRL, 0x01); // enable only
+  sniffer_clear();
 
   // Generate some transactions
   write32(BAR_DMEM, 0xDEADBEEF);
@@ -497,25 +634,12 @@ static int test_bus_sniffer(void) {
 
   usleep(1000);
 
-  uint32_t count = read32(BAR_SNIFFER + SNIFF_COUNT);
+  uint32_t count = sniffer_get_count();
   printf("  Log count: %u (expected >= 3)\n", count);
 
   if (count > 0) {
     printf("  Recent transactions:\n");
-    int n = (count < 5) ? count : 5;
-    for (int i = 0; i < n; i++) {
-      uint32_t base = BAR_SNIFFER + SNIFF_ENTRY0 + i * 0x10;
-      uint32_t w0 = read32(base + 0x00);
-      uint32_t w1 = read32(base + 0x04);
-      uint32_t w3 = read32(base + 0x0C);
-
-      uint32_t type = w0 & 1;
-      uint32_t ts = (w0 >> 16) & 0xFFFF;
-      uint32_t addr = (w1 >> 16) & 0xFFFF;
-
-      printf("    [%d] cycle=%5u %s addr=0x%05X data=0x%08X\n", i, ts,
-             type ? "WR" : "RD", addr, w3);
-    }
+    sniffer_dump(5);
   }
 
   int pass = (count >= 3);
@@ -523,18 +647,11 @@ static int test_bus_sniffer(void) {
   return pass;
 }
 
-// ----------------------------------------------------------------------------
-// CPU Logger Test
-// ----------------------------------------------------------------------------
-
 static int test_cpu_logger(void) {
   printf("=== CPU Logger Test ===\n");
 
-  // Reset and clear logger
   cpu_reset();
-  write32(BAR_CPULOG + CPULOG_CTRL, 0x3); // clear + enable
-  usleep(1000);
-  write32(BAR_CPULOG + CPULOG_CTRL, 0x1); // enable, log_imem=0 (DMEM only)
+  cpulog_clear();
 
   // Clear IMEM
   for (int i = 0; i < 64; i++) {
@@ -564,7 +681,7 @@ static int test_cpu_logger(void) {
   usleep(10);
   cpu_stop();
 
-  uint32_t count = read32(BAR_CPULOG + CPULOG_COUNT);
+  uint32_t count = cpulog_get_count();
   printf("  Log count: %u\n", count);
 
   if (count < 3) {
@@ -574,27 +691,17 @@ static int test_cpu_logger(void) {
   }
 
   printf("  Log entries (newest first):\n");
-  int n = (count < 8) ? count : 8;
+  cpulog_dump(8);
+
+  // Count transaction types
   int stores = 0, loads = 0;
-
+  int n = (count < 8) ? count : 8;
   for (int i = 0; i < n; i++) {
-    uint32_t base = BAR_CPULOG + CPULOG_ENTRY0 + (i * 0x10);
-    uint32_t w0 = read32(base + 0);
-    uint32_t w1 = read32(base + 4);
-    uint32_t w2 = read32(base + 8);
-
-    uint8_t type = w0 & 0x3;
-    uint32_t addr = (w0 >> 2) & 0x3FFFF;
-    uint32_t ts = w1;
-    uint32_t data = w2;
-
-    const char *types[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
-    printf("    [%d] cycle=%u %s addr=0x%05X data=0x%08X\n", i, ts, types[type],
-           addr << 2, data);
-
-    if (type == LOG_TYPE_DLOAD)
+    cpulog_entry_t entry;
+    cpulog_read_entry(i, &entry);
+    if (entry.type == CPULOG_TYPE_DLOAD)
       loads++;
-    if (type == LOG_TYPE_DSTORE)
+    if (entry.type == CPULOG_TYPE_DSTORE)
       stores++;
   }
 
@@ -602,35 +709,6 @@ static int test_cpu_logger(void) {
   int pass = (stores >= 2 && loads >= 1);
   printf("  %s\n\n", pass ? "PASS" : "FAIL");
   return pass;
-}
-
-// ----------------------------------------------------------------------------
-// Performance Counters
-// ----------------------------------------------------------------------------
-
-static void print_perf_counters(void) {
-  printf("=== Performance Counters ===\n");
-
-  uint32_t cycles = read32(BAR_CYCLES);
-  uint32_t instrs = read32(BAR_INSTRS);
-  uint32_t stalls = read32(BAR_STALLS);
-  uint32_t branches = read32(BAR_BRANCHES);
-  uint32_t br_taken = read32(BAR_BR_TAKEN);
-  uint32_t loads = read32(BAR_LOADS);
-  uint32_t stores = read32(BAR_STORES);
-
-  printf("  Cycles:         %u\n", cycles);
-  printf("  Instructions:   %u\n", instrs);
-  printf("  Stalls:         %u\n", stalls);
-  printf("  Branches:       %u (taken: %u)\n", branches, br_taken);
-  printf("  Loads:          %u\n", loads);
-  printf("  Stores:         %u\n", stores);
-
-  if (instrs > 0) {
-    printf("  CPI: %.2f\n", (float)cycles / instrs);
-    printf("  IPC: %.2f\n", (float)instrs / cycles);
-  }
-  printf("\n");
 }
 
 // ----------------------------------------------------------------------------
