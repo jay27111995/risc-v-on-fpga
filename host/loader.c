@@ -76,7 +76,12 @@ static int load_binary(const char *filename) {
 
     uint32_t *buf = malloc((size + 3) & ~3);
     memset(buf, 0, (size + 3) & ~3);
-    fread(buf, 1, size, f);
+    if (fread(buf, 1, size, f) != (size_t)size) {
+        fprintf(stderr, "Failed to read file\n");
+        free(buf);
+        fclose(f);
+        return 1;
+    }
     fclose(f);
 
     // Show first few instructions
