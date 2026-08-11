@@ -190,11 +190,13 @@ static void sniffer_read_entry(int idx, sniffer_entry_t *entry) {
   entry->data = w3;
 }
 
-static void sniffer_print_entry(int idx, const sniffer_entry_t *entry) {
-  uint64_t ns = CYCLES_TO_NS(entry->timestamp);
-  printf("    [%2d] cycle=%10lu (%10lu ns) %s addr=0x%05X data=0x%08X\n",
-         idx, entry->timestamp, ns, entry->is_write ? "WR" : "RD",
-         entry->address, entry->data);
+static void sniffer_print_entry(int idx, const sniffer_entry_t *entry,
+                                uint64_t base_cycle) {
+  uint64_t offset = entry->timestamp - base_cycle;
+  uint64_t offset_ns = CYCLES_TO_NS(offset);
+  printf("    [%2d] +%6lu cycles (+%6lu ns) %s addr=0x%05X data=0x%08X\n", idx,
+         offset, offset_ns, entry->is_write ? "WR" : "RD", entry->address,
+         entry->data);
 }
 
 static void sniffer_dump(int max_entries) {
@@ -204,10 +206,16 @@ static void sniffer_dump(int max_entries) {
     return;
   }
   int n = (count < (uint32_t)max_entries) ? count : max_entries;
+
+  // Read all entries first to find base cycle (oldest entry = last one)
+  sniffer_entry_t entries[64];
   for (int i = 0; i < n; i++) {
-    sniffer_entry_t entry;
-    sniffer_read_entry(i, &entry);
-    sniffer_print_entry(i, &entry);
+    sniffer_read_entry(i, &entries[i]);
+  }
+  uint64_t base_cycle = entries[n - 1].timestamp;
+
+  for (int i = 0; i < n; i++) {
+    sniffer_print_entry(i, &entries[i], base_cycle);
   }
 }
 
@@ -238,11 +246,13 @@ static void cpulog_read_entry(int idx, cpulog_entry_t *entry) {
   entry->data = w3;
 }
 
-static void cpulog_print_entry(int idx, const cpulog_entry_t *entry) {
-  uint64_t ns = CYCLES_TO_NS(entry->timestamp);
-  printf("    [%3d] cycle=%10lu (%10lu ns) %s addr=0x%05X data=0x%08X\n",
-         idx, entry->timestamp, ns, cpulog_type_names[entry->type & 3],
-         entry->address, entry->data);
+static void cpulog_print_entry(int idx, const cpulog_entry_t *entry,
+                               uint64_t base_cycle) {
+  uint64_t offset = entry->timestamp - base_cycle;
+  uint64_t offset_ns = CYCLES_TO_NS(offset);
+  printf("    [%3d] +%6lu cycles (+%6lu ns) %s addr=0x%05X data=0x%08X\n", idx,
+         offset, offset_ns, cpulog_type_names[entry->type & 3], entry->address,
+         entry->data);
 }
 
 static void cpulog_dump(int max_entries) {
@@ -252,10 +262,16 @@ static void cpulog_dump(int max_entries) {
     return;
   }
   int n = (count < (uint32_t)max_entries) ? count : max_entries;
+
+  // Read all entries first to find base cycle (oldest entry = last one)
+  cpulog_entry_t entries[256];
   for (int i = 0; i < n; i++) {
-    cpulog_entry_t entry;
-    cpulog_read_entry(i, &entry);
-    cpulog_print_entry(i, &entry);
+    cpulog_read_entry(i, &entries[i]);
+  }
+  uint64_t base_cycle = entries[n - 1].timestamp;
+
+  for (int i = 0; i < n; i++) {
+    cpulog_print_entry(i, &entries[i], base_cycle);
   }
 }
 
@@ -639,8 +655,8 @@ static int test_bus_sniffer(void) {
   printf("  Log count: %u (expected >= 3)\n", count);
 
   if (count > 0) {
-    printf("  Recent transactions:\n");
-    sniffer_dump(5);
+    printf("  Transactions (newest first):\n");
+    sniffer_dump(64);  // dump all (max 64)
   }
 
   int pass = (count >= 3);
@@ -692,11 +708,11 @@ static int test_cpu_logger(void) {
   }
 
   printf("  Log entries (newest first):\n");
-  cpulog_dump(8);
+  cpulog_dump(256);  // dump all (max 256)
 
   // Count transaction types
   int stores = 0, loads = 0;
-  int n = (count < 8) ? count : 8;
+  int n = (count < 256) ? count : 256;
   for (int i = 0; i < n; i++) {
     cpulog_entry_t entry;
     cpulog_read_entry(i, &entry);
