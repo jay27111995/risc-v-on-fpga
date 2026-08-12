@@ -5,22 +5,26 @@ set -e
 
 echo "Building host programs..."
 
+# Common libraries
 gcc -O2 -Wall -c pcie_vfio.c -o pcie_vfio.o
+gcc -O2 -Wall -c riscv_lib.c -o riscv_lib.o
+
+LIBS="pcie_vfio.o riscv_lib.o"
 
 gcc -O2 -Wall -c riscv_host.c -o riscv_host.o
-gcc -O2 -Wall pcie_vfio.o riscv_host.o -o riscv_host
+gcc -O2 -Wall $LIBS riscv_host.o -o riscv_host
 
 gcc -O2 -Wall -c loader.c -o loader.o
-gcc -O2 -Wall pcie_vfio.o loader.o -o loader
+gcc -O2 -Wall $LIBS loader.o -o loader
 
 gcc -O2 -Wall -c test_sniffer.c -o test_sniffer.o
-gcc -O2 -Wall pcie_vfio.o test_sniffer.o -o test_sniffer
+gcc -O2 -Wall $LIBS test_sniffer.o -o test_sniffer
 
 gcc -O2 -Wall -c test_logger.c -o test_logger.o
-gcc -O2 -Wall pcie_vfio.o test_logger.o -o test_logger
+gcc -O2 -Wall $LIBS test_logger.o -o test_logger
 
 gcc -O2 -Wall -c test_programs.c -o test_programs.o
-gcc -O2 -Wall pcie_vfio.o test_programs.o -o test_programs
+gcc -O2 -Wall $LIBS test_programs.o -o test_programs
 
 echo ""
 echo "Built:"

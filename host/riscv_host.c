@@ -27,6 +27,7 @@ static int run_test(const char *name, const uint32_t *prog, int prog_len,
     printf("  %s\n", desc);
 
   cpu_reset();
+  init_memory();
   load_program(prog, prog_len);
   cpu_run();
   usleep(10000);

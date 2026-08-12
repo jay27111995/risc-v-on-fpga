@@ -12,6 +12,9 @@ int main(int argc, char *argv[]) {
 
   printf("=== Bus Sniffer Test ===\n\n");
 
+  // Initialize memory and loggers
+  init_memory();
+
   int errors = 0;
 
   // -------------------------------------------------------------------------

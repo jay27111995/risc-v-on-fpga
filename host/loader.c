@@ -6,60 +6,20 @@
 // Example: ./loader ../sw/sum.bin 0000:b1:00.0 12
 // ============================================================================
 
+#include "riscv_lib.h"
+
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/stat.h>
-
-#include "pcie_vfio.h"
-
-// BAR Memory Map
-#define BAR_CTRL      0x0000
-#define BAR_STATUS    0x0008
-#define BAR_PC        0x0010
-#define BAR_CYCLES    0x0020
-#define BAR_INSTRS    0x0024
-#define BAR_IMEM      0x20000
-#define BAR_DMEM      0x80000
-
-#define CTRL_RUN      (1 << 0)
-#define CTRL_RESET    (1 << 1)
 
 // ----------------------------------------------------------------------------
-// CPU Control
-// ----------------------------------------------------------------------------
-
-static void cpu_reset(void) {
-    write32(BAR_CTRL, CTRL_RESET);
-    usleep(1000);
-}
-
-static void cpu_run(void) {
-    write32(BAR_CTRL, CTRL_RUN);
-}
-
-static void cpu_stop(void) {
-    write32(BAR_CTRL, 0);
-}
-
-// ----------------------------------------------------------------------------
-// Memory Access
+// Binary Loader (local - uses 64-bit writes for efficiency)
 // ----------------------------------------------------------------------------
 
 static void write_imem_pair(uint32_t pair_idx, uint32_t even, uint32_t odd) {
     write64(BAR_IMEM + pair_idx * 8, ((uint64_t)odd << 32) | even);
 }
-
-static uint32_t read_dmem(uint32_t word_idx) {
-    uint64_t data = read64(BAR_DMEM + (word_idx / 2) * 8);
-    return (word_idx & 1) ? (uint32_t)(data >> 32) : (uint32_t)data;
-}
-
-// ----------------------------------------------------------------------------
-// Binary Loader
-// ----------------------------------------------------------------------------
 
 static int load_binary(const char *filename) {
     FILE *f = fopen(filename, "rb");
@@ -91,19 +51,22 @@ static int load_binary(const char *filename) {
         printf("  [%02d] 0x%08X\n", i, buf[i]);
     }
 
+    // Initialize memory
+    printf("Initializing memory...\n");
+    init_memory();
+
     // Load to IMEM
+    printf("Loading program...\n");
     for (int i = 0; i < num_words; i += 2) {
         uint32_t even = buf[i];
-        uint32_t odd = (i + 1 < num_words) ? buf[i + 1] : 0x00000013;
+        uint32_t odd = (i + 1 < num_words) ? buf[i + 1] : EBREAK_INSTR;
         write_imem_pair(i / 2, even, odd);
     }
 
     // Verify readback
     printf("Verify IMEM readback:\n");
     for (int i = 0; i < 8 && i < num_words; i++) {
-        uint32_t offset = BAR_IMEM + (i & ~1) * 4;
-        uint64_t data = read64(offset);
-        uint32_t word = (i & 1) ? (uint32_t)(data >> 32) : (uint32_t)data;
+        uint32_t word = read_imem(i);
         printf("  [%02d] 0x%08X %s\n", i, word, (word == buf[i]) ? "OK" : "MISMATCH!");
     }
 
@@ -162,13 +125,7 @@ int main(int argc, char *argv[]) {
     cpu_stop();
     cpu_reset();
 
-    // Clear DMEM
-    printf("Clearing DMEM...\n");
-    for (int i = 0; i < 256; i++) {
-        write64(BAR_DMEM + i * 8, 0);
-    }
-
-    // Load binary
+    // Load binary (also initializes memory)
     if (load_binary(binary) < 0) {
         return 1;
     }
