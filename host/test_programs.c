@@ -11,7 +11,7 @@ static int test_sum(void) {
   printf("Computes sum(1..10) = 55\n\n");
 
   cpu_reset();
-  cpulog_clear();
+  init_memory();
 
   // Try to load sum.bin
   const char *paths[] = {"../sw/sum.bin", "sw/sum.bin", "sum.bin", NULL};
@@ -59,7 +59,7 @@ static int test_factorial(void) {
   printf("Computes factorial(5) = 120\n\n");
 
   cpu_reset();
-  cpulog_clear();
+  init_memory();
 
   // Try to load factorial.bin
   const char *paths[] = {"../sw/factorial.bin", "sw/factorial.bin",

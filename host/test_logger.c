@@ -23,6 +23,9 @@ int main(int argc, char *argv[]) {
   cpu_reset();
   cpulog_clear(); // DMEM only (log_imem=0)
 
+  // Initialize memory
+  init_memory();
+
   // Simple program: store 42 to dmem[0], load it back
   uint32_t prog1[] = {
       0x02A00093, // ADDI x1, x0, 42
@@ -61,6 +64,9 @@ int main(int argc, char *argv[]) {
 
   cpu_reset();
   cpulog_clear_with_imem(); // Enable IMEM logging
+
+  // Initialize memory
+  init_memory();
 
   // Simple test program: compute 5+3, store to dmem[0]
   uint32_t prog2[] = {
