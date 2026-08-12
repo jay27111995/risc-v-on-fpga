@@ -11,7 +11,7 @@ All 37 RV32I base instructions implemented and verified on hardware.
 - **Clock**: 250 MHz (PCIe clock domain)
 - **Pipeline**: 5-stage (IF → ID → EX → MEM → WB)
 - **Memories**: 128KB IMEM, 32KB DMEM
-- **Bitstream**: `riscv-soc-revid-0x2a-git-889988e-md5-d7fed8669d33b7202e660c61af79cef3.sof`
+- **Bitstream**: `riscv-soc-revid-0x2f-git-91a4c84-md5-a2936d3f2772083f6e6bcf3213e8759b.sof`
 
 ## Quick Start
 
@@ -19,22 +19,14 @@ All 37 RV32I base instructions implemented and verified on hardware.
 # 1. Program FPGA
 quartus_pgm -c 1 -m jtag -o "p;riscv-soc-*.sof"
 
-# 2. Build a C program
-cd sw && ./build.sh sum2.c
+# 2. Build host tools and a C program
+cd host && bash build.sh
+cd ../sw && ./build.sh sum.c
 
 # 3. Setup VFIO and run
-cd host
-sudo ./loader ../sw/sum2.bin 0000:b1:00.0 12
-```
-
-Expected output:
-```
-=== DMEM Contents ===
-  DMEM[ 0] =         55 (0x00000037)   ← sum(1..10) = 55
-  DMEM[ 1] =         10 (0x0000000A)
-  DMEM[ 2] =      57005 (0x0000DEAD)   ← marker
-
-sum.bin: PASSED (sum(1..10) = 55)
+PCI=0000:b1:00.0
+GRP=$(basename $(readlink /sys/bus/pci/devices/$PCI/iommu_group))
+sudo ./host/test_programs $PCI $GRP
 ```
 
 ## Architecture
@@ -80,6 +72,7 @@ Features:
 - Full data forwarding (EX→EX, MEM→EX)
 - Load-use hazard detection with stall
 - Branch resolution in EX stage
+- EBREAK instruction halts CPU
 
 ## BAR Memory Map
 
@@ -96,9 +89,26 @@ Features:
 | Offset | Name | Description |
 |--------|------|-------------|
 | 0x00 | CTRL | [0] RUN, [1] RESET |
-| 0x08 | STATUS | [0] RUNNING |
+| 0x08 | STATUS | [0] RUNNING, [1] HALTED |
 | 0x10 | PC | Current program counter |
-| 0x20 | CYCLES | Cycle count (write to clear) |
+| 0x20 | CYCLES | Cycle count (write to clear all counters) |
+| 0x24 | INSTRS | Instructions retired |
+| 0x28 | STALLS | Stall cycles |
+| 0x2C | BRANCHES | Branch instructions |
+| 0x30 | BR_TAKEN | Branches taken |
+| 0x34 | LOADS | Load instructions |
+| 0x38 | STORES | Store instructions |
+
+### Debug Loggers
+
+**Bus Sniffer** (0x40000): Logs host PCIe transactions to DMEM/IMEM regions.
+- 128-bit entries with 64-bit timestamps
+- Captures address, data, read/write type
+
+**CPU Logger** (0x50000): Logs CPU memory accesses.
+- 128-bit entries with 64-bit timestamps
+- Captures instruction fetches (optional), data loads, data stores
+- Ctrl bit [2] enables IMEM tracing
 
 ## Supported Instructions
 
@@ -113,12 +123,16 @@ Complete RV32I base instruction set (37 instructions):
 | B-type | BEQ, BNE, BLT, BGE, BLTU, BGEU |
 | U-type | LUI, AUIPC |
 | J-type | JAL |
+| System | EBREAK (halts CPU) |
 
 ## Directory Structure
 
 ```
 ├── rtl/                    # Verilog/SystemVerilog RTL
-│   ├── riscv_soc.sv       # Top-level SoC (CPU + memories)
+│   ├── riscv_soc.sv       # Top-level SoC (CPU + memories + loggers)
+│   ├── riscv_core.sv      # 5-stage pipelined CPU
+│   ├── decoder.sv         # Instruction decoder
+│   ├── alu.sv             # ALU
 │   ├── axi_core_hw.sv     # AXI-Lite slave wrapper
 │   ├── bus64to32.sv       # 64-to-32 bit bus adapter
 │   ├── bus_sniffer.sv     # Host transaction logger
@@ -127,31 +141,49 @@ Complete RV32I base instruction set (37 instructions):
 ├── sw/                     # Software/firmware
 │   ├── build.sh           # Build script (uses Quartus RiscFree GCC)
 │   ├── link.ld            # Linker script
-│   ├── start.S            # Startup assembly (jump to _start)
-│   └── sum2.c             # Example: sum(1..10) test program
+│   ├── start.S            # Startup assembly
+│   ├── sum.c              # Example: sum(1..10)
+│   └── factorial.c        # Example: factorial(5)
 │
-├── host/                   # Host-side tools
-│   ├── riscv_host.c       # Instruction test suite (15 tests)
-│   ├── loader.c           # Binary loader for .bin files
-│   └── Makefile
+├── host/                   # Host-side tools (see host/README.md)
+│   ├── riscv_lib.c/h      # Common library
+│   ├── riscv_host.c       # RV32I instruction tests
+│   ├── loader.c           # Binary loader
+│   ├── test_logger.c      # CPU logger test
+│   ├── test_sniffer.c     # Bus sniffer test
+│   └── test_programs.c    # Run sum.c/factorial.c
 │
 ├── tb/                     # Verilator testbenches
-│   ├── tb_axi_core.cpp    # Main testbench (30 tests)
-│   └── ...
+│   ├── tb_axi_core.cpp    # Main SoC testbench
+│   ├── tb_host_sim.cpp    # Host simulation tests
+│   ├── tb_bus_sniffer.cpp # Bus sniffer tests
+│   └── tb_cpu_logger.cpp  # CPU logger tests
 │
 ├── build/                  # Quartus build output
-│   └── *.sof              # FPGA bitstream
 │
 └── *.sof                   # Working bitstream (checked in)
 ```
 
-## Building Software
+## Building
 
-See [sw/README.md](sw/README.md) for details on compiling C programs.
+### Host Tools
 
 ```bash
-cd sw
-./build.sh sum2.c    # Builds sum2.bin
+cd host && bash build.sh
+```
+
+### Software (C Programs)
+
+```bash
+cd sw && ./build.sh sum.c
+```
+
+See [sw/README.md](sw/README.md) for toolchain setup.
+
+### FPGA Bitstream
+
+```bash
+cd build && quartus_sh --flow compile pcie_ed
 ```
 
 ## Running on FPGA
@@ -165,53 +197,40 @@ quartus_pgm -c 1 -m jtag -o "p;riscv-soc-*.sof"
 ### 2. Setup VFIO
 
 ```bash
-PCI=0000:b1:00.0  # Find with lspci
-GROUP=$(basename $(readlink /sys/bus/pci/devices/$PCI/iommu_group))
+PCI=0000:b1:00.0  # Find with: lspci | grep -i 1172
+GRP=$(basename $(readlink /sys/bus/pci/devices/$PCI/iommu_group))
 
-echo $PCI | sudo tee /sys/bus/pci/devices/$PCI/driver/unbind
+echo $PCI | sudo tee /sys/bus/pci/devices/$PCI/driver/unbind 2>/dev/null
 echo vfio-pci | sudo tee /sys/bus/pci/devices/$PCI/driver_override
 echo $PCI | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 ```
 
-### 3. Run Tests or Load Programs
+### 3. Run Tests
 
 ```bash
-# Run instruction tests
-cd host && make
-sudo ./riscv_host $PCI $GROUP
-
-# Or load a custom program
-sudo ./loader ../sw/sum2.bin $PCI $GROUP
+cd host
+sudo ./riscv_host $PCI $GRP      # RV32I instruction tests
+sudo ./test_logger $PCI $GRP    # CPU logger test
+sudo ./test_sniffer $PCI $GRP   # Bus sniffer test
+sudo ./test_programs $PCI $GRP  # Run sum.c/factorial.c
+sudo ./loader ../sw/program.bin $PCI $GRP  # Load custom program
 ```
+
+See [host/README.md](host/README.md) for details on each tool.
 
 ## Simulation
 
 ```bash
 module load verilator/5.024
 cd tb
+
+# Run all testbenches
 verilator --cc --top-module axi_core_hw -I../rtl ../rtl/*.sv \
     --exe tb_axi_core.cpp -CFLAGS "-std=c++17"
-make -C obj_dir -f Vaxi_core_hw.mk
-./obj_dir/Vaxi_core_hw
+make -C obj_dir -f Vaxi_core_hw.mk && ./obj_dir/Vaxi_core_hw
 ```
 
 ## Timing
 
-Current build has minor timing violation (-0.305 ns) on cpu_logger debug path at worst-case corner. Does not affect functional operation.
-
-| Clock Domain | Target | Achieved | Status |
-|--------------|--------|----------|--------|
-| PCIe pld_clkout | 250 MHz | 250 MHz | ⚠️ -0.3ns slack (debug path) |
-| PCIe pld_clkout_slow | 125 MHz | 233 MHz | ✅ |
-
-## Next Steps
-
-- [ ] Add M extension (MUL, DIV)
-- [ ] Add CSRs for interrupts (MTVEC, MEPC, MCAUSE)
-- [ ] Boot Zephyr RTOS
-- [ ] Add instruction cache
-- [ ] DDR memory controller
-
-## License
-
-MIT
+Current build: -0.185ns slack at worst-case corner (Slow 100C).
+Marginal but functional on hardware.
