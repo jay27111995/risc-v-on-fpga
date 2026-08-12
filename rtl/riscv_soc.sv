@@ -406,7 +406,7 @@ module riscv_soc (
 
     logic [4:0]  id_rd;
     logic [31:0] id_imm;
-    logic [3:0]  id_alu_op;
+    logic [4:0]  id_alu_op;
     logic        id_reg_write, id_alu_src, id_mem_read, id_mem_write, id_branch;
     logic [2:0]  id_branch_op;
     logic        id_jump, id_jump_reg;
@@ -455,7 +455,7 @@ module riscv_soc (
     logic [31:0] ex1_pc;
     logic [31:0] ex1_rs1_data, ex1_rs2_data;
     logic [31:0] ex1_imm;
-    logic [3:0]  ex1_alu_op;
+    logic [4:0]  ex1_alu_op;
     logic        ex1_reg_write, ex1_alu_src, ex1_mem_write, ex1_branch;
     logic [2:0]  ex1_branch_op;
     logic        ex1_jump, ex1_jump_reg;
@@ -545,7 +545,7 @@ module riscv_soc (
     logic [31:0] ex2_alu_a, ex2_alu_b;  // Registered ALU inputs
     logic [31:0] ex2_rs2_fwd;           // Forwarded rs2 for stores
     logic [31:0] ex2_imm;
-    logic [3:0]  ex2_alu_op;
+    logic [4:0]  ex2_alu_op;
     logic        ex2_alu_src;
     logic        ex2_mem_write, ex2_branch;
     logic [2:0]  ex2_branch_op;

@@ -339,11 +339,123 @@ static int test_halfword_ops(void) {
 }
 
 // ----------------------------------------------------------------------------
+// M Extension Tests
+// ----------------------------------------------------------------------------
+
+static int test_mul(void) {
+  uint32_t prog[] = {
+      0x00700093, // ADDI x1, x0, 7
+      0x00600113, // ADDI x2, x0, 6
+      0x022081B3, // MUL  x3, x1, x2
+      0x00302023, // SW   x3, 0(x0)
+      0x00100073, // EBREAK
+  };
+  return run_test("Test 16: MUL", prog, 5, 0, 42, "7 * 6 = 42");
+}
+
+static int test_mulh(void) {
+  printf("=== Test 17: MULH ===\n");
+  printf("  (0x10000 * 0x10000) >> 32 = 1\n");
+
+  cpu_reset();
+  init_memory();
+
+  uint32_t prog[] = {
+      0x000100B7, // LUI  x1, 0x10
+      0x00010137, // LUI  x2, 0x10
+      0x022091B3, // MULH x3, x1, x2
+      0x00302023, // SW   x3, 0(x0)
+      0x00100073, // EBREAK
+  };
+
+  load_program(prog, 5);
+  cpu_run();
+  cpu_wait_halt(100);
+  cpu_stop();
+
+  uint32_t result = read_dmem(0);
+  int pass = (result == 1);
+  printf("  Result: %u (expected 1) - %s\n\n", result, pass ? "PASS" : "FAIL");
+  return pass;
+}
+
+static int test_div(void) {
+  uint32_t prog[] = {
+      0x02A00093, // ADDI x1, x0, 42
+      0x00700113, // ADDI x2, x0, 7
+      0x0220C1B3, // DIV  x3, x1, x2
+      0x00302023, // SW   x3, 0(x0)
+      0x00100073, // EBREAK
+  };
+  return run_test("Test 18: DIV", prog, 5, 0, 6, "42 / 7 = 6");
+}
+
+static int test_divu(void) {
+  uint32_t prog[] = {
+      0x06400093, // ADDI x1, x0, 100
+      0x00A00113, // ADDI x2, x0, 10
+      0x0220D1B3, // DIVU x3, x1, x2
+      0x00302023, // SW   x3, 0(x0)
+      0x00100073, // EBREAK
+  };
+  return run_test("Test 19: DIVU", prog, 5, 0, 10, "100 / 10 = 10");
+}
+
+static int test_rem(void) {
+  uint32_t prog[] = {
+      0x02F00093, // ADDI x1, x0, 47
+      0x00700113, // ADDI x2, x0, 7
+      0x0220E1B3, // REM  x3, x1, x2
+      0x00302023, // SW   x3, 0(x0)
+      0x00100073, // EBREAK
+  };
+  return run_test("Test 20: REM", prog, 5, 0, 5, "47 % 7 = 5");
+}
+
+static int test_remu(void) {
+  uint32_t prog[] = {
+      0x06700093, // ADDI x1, x0, 103
+      0x00A00113, // ADDI x2, x0, 10
+      0x0220F1B3, // REMU x3, x1, x2
+      0x00302023, // SW   x3, 0(x0)
+      0x00100073, // EBREAK
+  };
+  return run_test("Test 21: REMU", prog, 5, 0, 3, "103 % 10 = 3");
+}
+
+static int test_div_zero(void) {
+  printf("=== Test 22: DIV by zero ===\n");
+  printf("  42 / 0 = -1 (0xFFFFFFFF)\n");
+
+  cpu_reset();
+  init_memory();
+
+  uint32_t prog[] = {
+      0x02A00093, // ADDI x1, x0, 42
+      0x00000113, // ADDI x2, x0, 0
+      0x0220C1B3, // DIV  x3, x1, x2
+      0x00302023, // SW   x3, 0(x0)
+      0x00100073, // EBREAK
+  };
+
+  load_program(prog, 5);
+  cpu_run();
+  cpu_wait_halt(100);
+  cpu_stop();
+
+  uint32_t result = read_dmem(0);
+  int pass = (result == 0xFFFFFFFF);
+  printf("  Result: 0x%08X (expected 0xFFFFFFFF) - %s\n\n", result,
+         pass ? "PASS" : "FAIL");
+  return pass;
+}
+
+// ----------------------------------------------------------------------------
 // Main
 // ----------------------------------------------------------------------------
 
 int main(int argc, char *argv[]) {
-  if (common_init(argc, argv, "RISC-V RV32I Instruction Tests") < 0)
+  if (common_init(argc, argv, "RISC-V RV32IM Instruction Tests") < 0)
     return 1;
 
   // Clear DMEM
@@ -368,12 +480,21 @@ int main(int argc, char *argv[]) {
   pass += test_byte_ops();
   pass += test_halfword_ops();
 
+  // Run M extension tests
+  pass += test_mul();
+  pass += test_mulh();
+  pass += test_div();
+  pass += test_divu();
+  pass += test_rem();
+  pass += test_remu();
+  pass += test_div_zero();
+
   printf("================================================================================\n");
-  printf("RV32I Summary: %d/15 tests passed\n", pass);
+  printf("RV32IM Summary: %d/22 tests passed\n", pass);
   printf("================================================================================\n");
 
   print_perf_counters();
 
   common_cleanup();
-  return (pass == 15) ? 0 : 1;
+  return (pass == 22) ? 0 : 1;
 }
