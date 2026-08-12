@@ -9,7 +9,7 @@
 #include <cstring>
 #include "Vaxi_core_hw.h"
 #include "verilated.h"
-#include "../host/riscv_tests.h"
+#include "../host/include/riscv_tests.h"
 
 // BAR offsets (must match riscv_host.c)
 #define BAR_CTRL      0x0000
@@ -441,10 +441,16 @@ int main(int argc, char **argv) {
     pass += test_byte_ops(&bar);
     pass += test_halfword_ops(&bar);
 
+    // Run M extension tests
+    printf("=== M Extension Tests ===\n\n");
+    for (size_t i = 0; i < M_EXT_TEST_COUNT; i++) {
+        pass += run_single_test(&bar, &m_ext_tests[i], RISCV_TEST_COUNT + 5 + i + 1);
+    }
+
     // Test CPU logger parsing
     pass += test_cpu_logger(&bar);
 
-    int total = RISCV_TEST_COUNT + 6;
+    int total = RISCV_TEST_COUNT + 5 + M_EXT_TEST_COUNT + 1;
     printf("=== Summary: %d/%d tests passed ===\n", pass, total);
 
     if (pass == total) {

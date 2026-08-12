@@ -35,7 +35,7 @@ module decoder (
     output logic [31:0] imm,
 
     // Control signals
-    output logic [3:0]  alu_op,      // ALU operation (4 bits)
+    output logic [4:0]  alu_op,      // ALU operation (5 bits for M extension)
     output logic        reg_write,   // write to register file?
     output logic        alu_src,     // ALU source: 0=rs2, 1=immediate
     output logic        mem_read,    // load from memory?
@@ -80,7 +80,7 @@ localparam OP_SYSTEM = 7'b1110011;  // ECALL, EBREAK
 always_comb begin
     // Defaults
     imm = 32'b0;
-    alu_op = 4'b0000;
+    alu_op = 5'b00000;
     reg_write = 0;
     alu_src = 0;
     mem_read = 0;
@@ -95,20 +95,37 @@ always_comb begin
     ebreak = 0;
 
     case (opcode)
-        OP_RTYPE: begin  // R-type: ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU
+        OP_RTYPE: begin  // R-type: ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU + M extension
             reg_write = 1;
             alu_src = 0;  // use rs2
-            case (funct3)
-                3'b000: alu_op = (funct7[5]) ? 4'b0001 : 4'b0000;  // SUB or ADD
-                3'b001: alu_op = 4'b0101;  // SLL
-                3'b010: alu_op = 4'b1000;  // SLT
-                3'b011: alu_op = 4'b1001;  // SLTU
-                3'b100: alu_op = 4'b0100;  // XOR
-                3'b101: alu_op = (funct7[5]) ? 4'b0111 : 4'b0110;  // SRA or SRL
-                3'b110: alu_op = 4'b0011;  // OR
-                3'b111: alu_op = 4'b0010;  // AND
-                default: alu_op = 4'b0000;
-            endcase
+
+            if (funct7 == 7'b0000001) begin
+                // M extension: MUL, MULH, MULHSU, MULHU, DIV, DIVU, REM, REMU
+                case (funct3)
+                    3'b000: alu_op = 5'b10000;  // MUL
+                    3'b001: alu_op = 5'b10001;  // MULH
+                    3'b010: alu_op = 5'b10010;  // MULHSU
+                    3'b011: alu_op = 5'b10011;  // MULHU
+                    3'b100: alu_op = 5'b10100;  // DIV
+                    3'b101: alu_op = 5'b10101;  // DIVU
+                    3'b110: alu_op = 5'b10110;  // REM
+                    3'b111: alu_op = 5'b10111;  // REMU
+                    default: alu_op = 5'b00000;
+                endcase
+            end else begin
+                // RV32I base R-type
+                case (funct3)
+                    3'b000: alu_op = (funct7[5]) ? 5'b00001 : 5'b00000;  // SUB or ADD
+                    3'b001: alu_op = 5'b00101;  // SLL
+                    3'b010: alu_op = 5'b01000;  // SLT
+                    3'b011: alu_op = 5'b01001;  // SLTU
+                    3'b100: alu_op = 5'b00100;  // XOR
+                    3'b101: alu_op = (funct7[5]) ? 5'b00111 : 5'b00110;  // SRA or SRL
+                    3'b110: alu_op = 5'b00011;  // OR
+                    3'b111: alu_op = 5'b00010;  // AND
+                    default: alu_op = 5'b00000;
+                endcase
+            end
         end
 
         OP_ITYPE: begin  // I-type: ADDI, ANDI, ORI, XORI, SLLI, SRLI, SRAI, SLTI, SLTIU
@@ -118,21 +135,21 @@ always_comb begin
             // Sign-extend to 32 bits by replicating bit 31
             imm = {{20{instr[31]}}, instr[31:20]};
             case (funct3)
-                3'b000: alu_op = 4'b0000;  // ADDI
-                3'b010: alu_op = 4'b1000;  // SLTI
-                3'b011: alu_op = 4'b1001;  // SLTIU
+                3'b000: alu_op = 5'b00000;  // ADDI
+                3'b010: alu_op = 5'b01000;  // SLTI
+                3'b011: alu_op = 5'b01001;  // SLTIU
                 3'b001: begin              // SLLI
-                    alu_op = 4'b0101;
+                    alu_op = 5'b00101;
                     imm = {27'b0, instr[24:20]};  // shamt is bottom 5 bits
                 end
                 3'b101: begin             // SRLI or SRAI
-                    alu_op = (instr[30]) ? 4'b0111 : 4'b0110;
+                    alu_op = (instr[30]) ? 5'b00111 : 5'b00110;
                     imm = {27'b0, instr[24:20]};  // shamt is bottom 5 bits
                 end
-                3'b111: alu_op = 4'b0010;  // ANDI
-                3'b110: alu_op = 4'b0011;  // ORI
-                3'b100: alu_op = 4'b0100;  // XORI
-                default: alu_op = 4'b0000;
+                3'b111: alu_op = 5'b00010;  // ANDI
+                3'b110: alu_op = 5'b00011;  // ORI
+                3'b100: alu_op = 5'b00100;  // XORI
+                default: alu_op = 5'b00000;
             endcase
         end
 
@@ -141,7 +158,7 @@ always_comb begin
             alu_src = 1;     // ALU uses immediate
             mem_read = 1;    // read from data memory
             mem_op = funct3; // 000=LB, 001=LH, 010=LW, 100=LBU, 101=LHU
-            alu_op = 4'b0000; // ADD: address = rs1 + imm
+            alu_op = 5'b00000; // ADD: address = rs1 + imm
             // I-type immediate (same as ADDI)
             imm = {{20{instr[31]}}, instr[31:20]};
         end
@@ -151,7 +168,7 @@ always_comb begin
             alu_src = 1;     // ALU uses immediate
             mem_write = 1;   // write to data memory
             mem_op = funct3; // 000=SB, 001=SH, 010=SW
-            alu_op = 4'b0000; // ADD: address = rs1 + imm
+            alu_op = 5'b00000; // ADD: address = rs1 + imm
             // S-type immediate: split across instr[31:25] and instr[11:7]
             imm = {{20{instr[31]}}, instr[31:25], instr[11:7]};
         end
@@ -159,7 +176,7 @@ always_comb begin
         OP_BRANCH: begin  // BEQ, BNE: if (condition) PC += imm
             branch = 1;
             branch_op = funct3;  // 000=BEQ, 001=BNE, 100=BLT, 101=BGE, 110=BLTU, 111=BGEU
-            alu_op = 4'b0001; // SUB: compare rs1 - rs2, check zero flag
+            alu_op = 5'b00001; // SUB: compare rs1 - rs2, check zero flag
             // B-type immediate: imm[12|10:5|4:1|11], shifted left by 1 (2-byte aligned)
             imm = {{20{instr[31]}}, instr[7], instr[30:25], instr[11:8], 1'b0};
         end
@@ -176,7 +193,7 @@ always_comb begin
             jump = 1;
             jump_reg = 1;    // Target is rs1 + imm
             alu_src = 1;     // ALU uses immediate
-            alu_op = 4'b0000; // ADD: compute rs1 + imm
+            alu_op = 5'b00000; // ADD: compute rs1 + imm
             // I-type immediate
             imm = {{20{instr[31]}}, instr[31:20]};
         end

@@ -337,6 +337,57 @@ int main(int argc, char** argv) {
     printf("\n");
 
     // =========================================================================
+    // Test 1: BEQ instruction
+    // =========================================================================
+    printf("=== Test 1: BEQ Instruction ===\n");
+
+    // Stop CPU and reset
+    tb.axi_write(0x0000, 0x02);  // RESET
+    for (int i = 0; i < 10; i++) tb.tick();
+
+    // Program: Test BEQ (branch if equal)
+    // x1 = 5, x2 = 5
+    // if (x1 == x2) skip next instruction
+    // store 99 (wrong)
+    // store 42 (correct)
+    const uint32_t beq_program[] = {
+        0x00500093,  // ADDI x1, x0, 5      ; x1 = 5
+        0x00500113,  // ADDI x2, x0, 5      ; x2 = 5
+        0x00208463,  // BEQ  x1, x2, 8      ; if (x1 == x2) skip next
+        0x06300193,  // ADDI x3, x0, 99     ; x3 = 99 (should be skipped)
+        0x02A00193,  // ADDI x3, x0, 42     ; x3 = 42
+        0x00302023,  // SW   x3, 0(x0)      ; store x3 to dmem[0]
+        0x00100073,  // EBREAK
+    };
+    const int beq_program_size = sizeof(beq_program) / sizeof(beq_program[0]);
+
+    // Load Program to IMEM
+    for (int i = 0; i < beq_program_size; i += 2) {
+        uint32_t even = beq_program[i];
+        uint32_t odd = (i + 1 < beq_program_size) ? beq_program[i + 1] : 0x00100073;
+        uint64_t pair = ((uint64_t)odd << 32) | even;
+        tb.axi_write(0x20000 + i * 4, pair);
+    }
+
+    // Clear DMEM
+    tb.axi_write(0x80000, 0);
+
+    // Start CPU
+    tb.axi_write(0x0000, 0x01);  // RUN
+    for (int i = 0; i < 100; i++) tb.tick();
+
+    // Check result - dmem[0] should be 42 (BEQ taken, skipped 99)
+    uint32_t beq_result = (uint32_t)tb.axi_read(0x80000);
+    printf("  DMEM[0] = %u (expected 42)\n", beq_result);
+    if (beq_result != 42) {
+        printf("  ERROR: BEQ test failed!\n"); errors++;
+    } else {
+        printf("  BEQ test PASSED!\n");
+    }
+
+    printf("\n");
+
+    // =========================================================================
     // Test 2: BNE instruction
     // =========================================================================
     printf("=== Test 2: BNE Instruction ===\n");
@@ -1535,6 +1586,216 @@ int main(int argc, char** argv) {
         printf("  ERROR: EBREAK test failed - instructions after EBREAK executed!\n"); errors++;
     } else {
         printf("  EBREAK test PASSED!\n");
+    }
+
+    // ========================================================================
+    // M Extension Tests (Multiply/Divide)
+    // ========================================================================
+
+    // Test 32: MUL (multiply low)
+    {
+        printf("\n=== Test 32: MUL (multiply low) ===\n");
+        tb.axi_write(0x00, 0x02);  // RESET
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // 7 * 6 = 42
+        tb.axi_write(0x20000 + 0,  0x00700093);  // ADDI x1, x0, 7
+        tb.axi_write(0x20000 + 4,  0x00600113);  // ADDI x2, x0, 6
+        tb.axi_write(0x20000 + 8,  0x022081B3);  // MUL  x3, x1, x2  (funct7=0000001, funct3=000)
+        tb.axi_write(0x20000 + 12, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 16, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);  // Clear DMEM
+        tb.axi_write(0x00, 0x01);  // RUN
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t mul_result = (uint32_t)tb.axi_read(0x80000);
+        printf("  7 * 6 = %u (expected 42)\n", mul_result);
+        if (mul_result != 42) { printf("  ERROR!\n"); errors++; }
+        else { printf("  MUL test PASSED!\n"); }
+    }
+
+    // Test 33: MULH (multiply high signed)
+    {
+        printf("\n=== Test 33: MULH (multiply high signed) ===\n");
+        tb.axi_write(0x00, 0x02);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // 0x10000 * 0x10000 = 0x100000000 -> MULH returns 1
+        tb.axi_write(0x20000 + 0,  0x000100B7);  // LUI  x1, 0x10     (x1 = 0x10000)
+        tb.axi_write(0x20000 + 4,  0x00010137);  // LUI  x2, 0x10     (x2 = 0x10000)
+        tb.axi_write(0x20000 + 8,  0x022091B3);  // MULH x3, x1, x2   (funct7=0000001, funct3=001)
+        tb.axi_write(0x20000 + 12, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 16, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t mulh_result = (uint32_t)tb.axi_read(0x80000);
+        printf("  (0x10000 * 0x10000) >> 32 = %u (expected 1)\n", mulh_result);
+        if (mulh_result != 1) { printf("  ERROR!\n"); errors++; }
+        else { printf("  MULH test PASSED!\n"); }
+    }
+
+    // Test 34: MULHSU (multiply high signed×unsigned)
+    {
+        printf("\n=== Test 34: MULHSU (multiply high signed*unsigned) ===\n");
+        tb.axi_write(0x00, 0x02);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // 0x10000 * 0x10000 = 0x100000000 -> MULHSU returns 1
+        tb.axi_write(0x20000 + 0,  0x000100B7);  // LUI  x1, 0x10     (x1 = 0x10000, signed positive)
+        tb.axi_write(0x20000 + 4,  0x00010137);  // LUI  x2, 0x10     (x2 = 0x10000, unsigned)
+        tb.axi_write(0x20000 + 8,  0x0220A1B3);  // MULHSU x3, x1, x2 (funct7=0000001, funct3=010)
+        tb.axi_write(0x20000 + 12, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 16, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t mulhsu_result = (uint32_t)tb.axi_read(0x80000);
+        printf("  (0x10000 * 0x10000) >> 32 = %u (expected 1)\n", mulhsu_result);
+        if (mulhsu_result != 1) { printf("  ERROR!\n"); errors++; }
+        else { printf("  MULHSU test PASSED!\n"); }
+    }
+
+    // Test 35: MULHU (multiply high unsigned)
+    {
+        printf("\n=== Test 35: MULHU (multiply high unsigned) ===\n");
+        tb.axi_write(0x00, 0x02);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // 0x10000 * 0x10000 = 0x100000000 -> MULHU returns 1
+        tb.axi_write(0x20000 + 0,  0x000100B7);  // LUI  x1, 0x10     (x1 = 0x10000)
+        tb.axi_write(0x20000 + 4,  0x00010137);  // LUI  x2, 0x10     (x2 = 0x10000)
+        tb.axi_write(0x20000 + 8,  0x0220B1B3);  // MULHU x3, x1, x2  (funct7=0000001, funct3=011)
+        tb.axi_write(0x20000 + 12, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 16, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t mulhu_result = (uint32_t)tb.axi_read(0x80000);
+        printf("  (0x10000 * 0x10000) >> 32 = %u (expected 1)\n", mulhu_result);
+        if (mulhu_result != 1) { printf("  ERROR!\n"); errors++; }
+        else { printf("  MULHU test PASSED!\n"); }
+    }
+
+    // Test 36: DIV (signed division)
+    {
+        printf("\n=== Test 36: DIV (signed division) ===\n");
+        tb.axi_write(0x00, 0x02);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // 42 / 7 = 6
+        tb.axi_write(0x20000 + 0,  0x02A00093);  // ADDI x1, x0, 42
+        tb.axi_write(0x20000 + 4,  0x00700113);  // ADDI x2, x0, 7
+        tb.axi_write(0x20000 + 8,  0x0220C1B3);  // DIV  x3, x1, x2   (funct7=0000001, funct3=100)
+        tb.axi_write(0x20000 + 12, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 16, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t div_result = (uint32_t)tb.axi_read(0x80000);
+        printf("  42 / 7 = %u (expected 6)\n", div_result);
+        if (div_result != 6) { printf("  ERROR!\n"); errors++; }
+        else { printf("  DIV test PASSED!\n"); }
+    }
+
+    // Test 37: DIVU (unsigned division)
+    {
+        printf("\n=== Test 37: DIVU (unsigned division) ===\n");
+        tb.axi_write(0x00, 0x02);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // 100 / 10 = 10
+        tb.axi_write(0x20000 + 0,  0x06400093);  // ADDI x1, x0, 100
+        tb.axi_write(0x20000 + 4,  0x00A00113);  // ADDI x2, x0, 10
+        tb.axi_write(0x20000 + 8,  0x0220D1B3);  // DIVU x3, x1, x2   (funct7=0000001, funct3=101)
+        tb.axi_write(0x20000 + 12, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 16, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t divu_result = (uint32_t)tb.axi_read(0x80000);
+        printf("  100 / 10 = %u (expected 10)\n", divu_result);
+        if (divu_result != 10) { printf("  ERROR!\n"); errors++; }
+        else { printf("  DIVU test PASSED!\n"); }
+    }
+
+    // Test 38: REM (signed remainder)
+    {
+        printf("\n=== Test 38: REM (signed remainder) ===\n");
+        tb.axi_write(0x00, 0x02);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // 47 % 7 = 5
+        tb.axi_write(0x20000 + 0,  0x02F00093);  // ADDI x1, x0, 47
+        tb.axi_write(0x20000 + 4,  0x00700113);  // ADDI x2, x0, 7
+        tb.axi_write(0x20000 + 8,  0x0220E1B3);  // REM  x3, x1, x2   (funct7=0000001, funct3=110)
+        tb.axi_write(0x20000 + 12, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 16, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t rem_result = (uint32_t)tb.axi_read(0x80000);
+        printf("  47 %% 7 = %u (expected 5)\n", rem_result);
+        if (rem_result != 5) { printf("  ERROR!\n"); errors++; }
+        else { printf("  REM test PASSED!\n"); }
+    }
+
+    // Test 39: REMU (unsigned remainder)
+    {
+        printf("\n=== Test 39: REMU (unsigned remainder) ===\n");
+        tb.axi_write(0x00, 0x02);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // 103 % 10 = 3
+        tb.axi_write(0x20000 + 0,  0x06700093);  // ADDI x1, x0, 103
+        tb.axi_write(0x20000 + 4,  0x00A00113);  // ADDI x2, x0, 10
+        tb.axi_write(0x20000 + 8,  0x0220F1B3);  // REMU x3, x1, x2   (funct7=0000001, funct3=111)
+        tb.axi_write(0x20000 + 12, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 16, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t remu_result = (uint32_t)tb.axi_read(0x80000);
+        printf("  103 %% 10 = %u (expected 3)\n", remu_result);
+        if (remu_result != 3) { printf("  ERROR!\n"); errors++; }
+        else { printf("  REMU test PASSED!\n"); }
+    }
+
+    // Test 40: DIV by zero (should return -1 = 0xFFFFFFFF)
+    {
+        printf("\n=== Test 40: DIV by zero ===\n");
+        tb.axi_write(0x00, 0x02);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        tb.axi_write(0x20000 + 0,  0x02A00093);  // ADDI x1, x0, 42
+        tb.axi_write(0x20000 + 4,  0x00000113);  // ADDI x2, x0, 0
+        tb.axi_write(0x20000 + 8,  0x0220C1B3);  // DIV  x3, x1, x2
+        tb.axi_write(0x20000 + 12, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 16, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t divzero_result = (uint32_t)tb.axi_read(0x80000);
+        printf("  42 / 0 = 0x%08X (expected 0xFFFFFFFF)\n", divzero_result);
+        if (divzero_result != 0xFFFFFFFF) { printf("  ERROR!\n"); errors++; }
+        else { printf("  DIV by zero test PASSED!\n"); }
     }
 
     printf("\n");

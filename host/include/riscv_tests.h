@@ -216,6 +216,93 @@ static const uint32_t prog_halfword_ops[] = {
 };
 // Expected: dmem[20]=0xFFFFFFFF, dmem[21]=0x0000FFFF
 
+// ----------------------------------------------------------------------------
+// M Extension Tests (Multiply/Divide)
+// ----------------------------------------------------------------------------
+
+// Test: MUL (multiply low 32 bits)
+static const uint32_t prog_mul[] = {
+    0x00700093,  // ADDI x1, x0, 7
+    0x00600113,  // ADDI x2, x0, 6
+    0x022081B3,  // MUL  x3, x1, x2  (7 * 6 = 42)
+    0x00302023,  // SW   x3, 0(x0)
+    0x00100073,  // EBREAK
+};
+// Expected: dmem[0]=42
+
+// Test: MULH (multiply high signed)
+static const uint32_t prog_mulh[] = {
+    0x000100B7,  // LUI  x1, 0x10     (x1 = 0x10000)
+    0x00010137,  // LUI  x2, 0x10     (x2 = 0x10000)
+    0x022091B3,  // MULH x3, x1, x2   (0x10000 * 0x10000 = 0x100000000, high = 1)
+    0x00302023,  // SW   x3, 0(x0)
+    0x00100073,  // EBREAK
+};
+// Expected: dmem[0]=1
+
+// Test: DIV (signed division)
+static const uint32_t prog_div[] = {
+    0x02A00093,  // ADDI x1, x0, 42
+    0x00700113,  // ADDI x2, x0, 7
+    0x0220C1B3,  // DIV  x3, x1, x2   (42 / 7 = 6)
+    0x00302023,  // SW   x3, 0(x0)
+    0x00100073,  // EBREAK
+};
+// Expected: dmem[0]=6
+
+// Test: DIVU (unsigned division)
+static const uint32_t prog_divu[] = {
+    0x06400093,  // ADDI x1, x0, 100
+    0x00A00113,  // ADDI x2, x0, 10
+    0x0220D1B3,  // DIVU x3, x1, x2   (100 / 10 = 10)
+    0x00302023,  // SW   x3, 0(x0)
+    0x00100073,  // EBREAK
+};
+// Expected: dmem[0]=10
+
+// Test: REM (signed remainder)
+static const uint32_t prog_rem[] = {
+    0x02F00093,  // ADDI x1, x0, 47
+    0x00700113,  // ADDI x2, x0, 7
+    0x0220E1B3,  // REM  x3, x1, x2   (47 % 7 = 5)
+    0x00302023,  // SW   x3, 0(x0)
+    0x00100073,  // EBREAK
+};
+// Expected: dmem[0]=5
+
+// Test: REMU (unsigned remainder)
+static const uint32_t prog_remu[] = {
+    0x06700093,  // ADDI x1, x0, 103
+    0x00A00113,  // ADDI x2, x0, 10
+    0x0220F1B3,  // REMU x3, x1, x2   (103 % 10 = 3)
+    0x00302023,  // SW   x3, 0(x0)
+    0x00100073,  // EBREAK
+};
+// Expected: dmem[0]=3
+
+// Test: DIV by zero (should return -1)
+static const uint32_t prog_div_zero[] = {
+    0x02A00093,  // ADDI x1, x0, 42
+    0x00000113,  // ADDI x2, x0, 0
+    0x0220C1B3,  // DIV  x3, x1, x2   (42 / 0 = -1)
+    0x00302023,  // SW   x3, 0(x0)
+    0x00100073,  // EBREAK
+};
+// Expected: dmem[0]=0xFFFFFFFF
+
+// M extension test table
+static const riscv_test_t m_ext_tests[] = {
+    {"MUL",      prog_mul,      ARRAY_SIZE(prog_mul),      0, 42,         0, "7 * 6 = 42"},
+    {"MULH",     prog_mulh,     ARRAY_SIZE(prog_mulh),     0, 1,          0, "(0x10000 * 0x10000) >> 32 = 1"},
+    {"DIV",      prog_div,      ARRAY_SIZE(prog_div),      0, 6,          0, "42 / 7 = 6"},
+    {"DIVU",     prog_divu,     ARRAY_SIZE(prog_divu),     0, 10,         0, "100 / 10 = 10"},
+    {"REM",      prog_rem,      ARRAY_SIZE(prog_rem),      0, 5,          0, "47 % 7 = 5"},
+    {"REMU",     prog_remu,     ARRAY_SIZE(prog_remu),     0, 3,          0, "103 % 10 = 3"},
+    {"DIV by 0", prog_div_zero, ARRAY_SIZE(prog_div_zero), 0, 0xFFFFFFFF, 1, "42 / 0 = -1"},
+};
+
+#define M_EXT_TEST_COUNT ARRAY_SIZE(m_ext_tests)
+
 // Test: CPU Logger test program
 static const uint32_t prog_cpulog_test[] = {
     0x00A00093,  // ADDI x1, x0, 10
