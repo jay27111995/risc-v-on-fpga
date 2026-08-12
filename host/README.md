@@ -2,13 +2,35 @@
 
 Host-side programs for interacting with the RISC-V SoC over PCIe.
 
+## Directory Structure
+
+```
+host/
+├── src/              # Source files (.c)
+│   ├── pcie_vfio.c   # PCIe VFIO driver
+│   ├── riscv_lib.c   # Common library
+│   ├── riscv_host.c  # RV32I instruction tests
+│   ├── loader.c      # Binary loader
+│   ├── test_logger.c # CPU logger test
+│   ├── test_sniffer.c# Bus sniffer test
+│   └── test_programs.c # Run sum.c/factorial.c
+├── include/          # Header files (.h)
+│   ├── pcie_vfio.h   # VFIO driver interface
+│   ├── riscv_lib.h   # Library interface
+│   ├── riscv_common.h# Common includes
+│   └── riscv_tests.h # Test definitions
+├── bin/              # Built executables (gitignored)
+├── build.sh          # Build script
+└── README.md
+```
+
 ## Building
 
 ```bash
 bash build.sh
 ```
 
-Builds all programs with `-O2 -Wall` (no warnings allowed).
+Builds all programs to `bin/` with `-O2 -Wall` (no warnings allowed).
 
 ## Programs
 
@@ -17,7 +39,7 @@ Builds all programs with `-O2 -Wall` (no warnings allowed).
 **RV32I instruction test suite.** Tests all 37 base instructions.
 
 ```bash
-sudo ./riscv_host $PCI $GRP
+sudo ./bin/riscv_host $PCI $GRP
 ```
 
 Runs individual tests for each instruction type:
@@ -33,8 +55,8 @@ Runs individual tests for each instruction type:
 **Binary loader.** Loads a `.bin` file to IMEM and runs it.
 
 ```bash
-sudo ./loader <program.bin> [pci_addr] [iommu_group] [run_time_ms]
-sudo ./loader ../sw/sum.bin 0000:b1:00.0 12 100
+sudo ./bin/loader <program.bin> [pci_addr] [iommu_group] [run_time_ms]
+sudo ./bin/loader ../sw/sum.bin 0000:b1:00.0 12 100
 ```
 
 Features:
@@ -49,7 +71,7 @@ Features:
 **CPU logger test.** Tests the CPU memory access logger with IMEM tracing.
 
 ```bash
-sudo ./test_logger $PCI $GRP
+sudo ./bin/test_logger $PCI $GRP
 ```
 
 Tests:
@@ -63,7 +85,7 @@ Verifies that logged instruction opcodes match the program.
 **Bus sniffer test.** Tests the host transaction logger.
 
 ```bash
-sudo ./test_sniffer $PCI $GRP
+sudo ./bin/test_sniffer $PCI $GRP
 ```
 
 Tests:
@@ -79,7 +101,7 @@ Note: 64-bit BAR causes read-modify-write behavior (4 bus transactions per 32-bi
 **Program runner.** Loads and runs C programs from `sw/` directory.
 
 ```bash
-sudo ./test_programs $PCI $GRP
+sudo ./bin/test_programs $PCI $GRP
 ```
 
 Runs:
@@ -162,5 +184,5 @@ echo $PCI | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 GRP=$(basename $(readlink /sys/bus/pci/devices/$PCI/iommu_group))
 
 # Run (needs root for VFIO)
-sudo ./riscv_host $PCI $GRP
+sudo ./bin/riscv_host $PCI $GRP
 ```

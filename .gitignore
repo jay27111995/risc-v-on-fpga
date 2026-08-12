@@ -10,8 +10,4 @@ incremental_db/
 output_files/
 
 # Host binaries
-host/riscv_host
-host/loader
-host/test_logger
-host/test_sniffer
-host/test_programs
+host/bin/

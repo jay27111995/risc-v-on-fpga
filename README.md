@@ -146,12 +146,10 @@ Complete RV32I base instruction set (37 instructions):
 │   └── factorial.c        # Example: factorial(5)
 │
 ├── host/                   # Host-side tools (see host/README.md)
-│   ├── riscv_lib.c/h      # Common library
-│   ├── riscv_host.c       # RV32I instruction tests
-│   ├── loader.c           # Binary loader
-│   ├── test_logger.c      # CPU logger test
-│   ├── test_sniffer.c     # Bus sniffer test
-│   └── test_programs.c    # Run sum.c/factorial.c
+│   ├── src/               # Source files
+│   ├── include/           # Header files
+│   ├── bin/               # Built executables (gitignored)
+│   └── build.sh           # Build script
 │
 ├── tb/                     # Verilator testbenches
 │   ├── tb_axi_core.cpp    # Main SoC testbench
@@ -209,11 +207,11 @@ echo $PCI | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 
 ```bash
 cd host
-sudo ./riscv_host $PCI $GRP      # RV32I instruction tests
-sudo ./test_logger $PCI $GRP    # CPU logger test
-sudo ./test_sniffer $PCI $GRP   # Bus sniffer test
-sudo ./test_programs $PCI $GRP  # Run sum.c/factorial.c
-sudo ./loader ../sw/program.bin $PCI $GRP  # Load custom program
+sudo ./bin/riscv_host $PCI $GRP      # RV32I instruction tests
+sudo ./bin/test_logger $PCI $GRP     # CPU logger test
+sudo ./bin/test_sniffer $PCI $GRP    # Bus sniffer test
+sudo ./bin/test_programs $PCI $GRP   # Run sum.c/factorial.c
+sudo ./bin/loader ../sw/program.bin $PCI $GRP  # Load custom program
 ```
 
 See [host/README.md](host/README.md) for details on each tool.
