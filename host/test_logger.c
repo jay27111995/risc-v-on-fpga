@@ -63,10 +63,12 @@ int main(int argc, char *argv[]) {
   printf("----------------------------------\n");
 
   cpu_reset();
-  cpulog_clear_with_imem(); // Enable IMEM logging
 
-  // Initialize memory
+  // Initialize memory (clears logger with DMEM-only)
   init_memory();
+
+  // Enable IMEM logging after init
+  cpulog_clear_with_imem();
 
   // Simple test program: compute 5+3, store to dmem[0]
   uint32_t prog2[] = {
