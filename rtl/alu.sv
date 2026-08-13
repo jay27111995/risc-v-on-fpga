@@ -2,6 +2,9 @@
 // The "calculator" of the CPU
 // Takes two 32-bit inputs, performs operation based on 'op'
 // Supports RV32I base + M extension (multiply/divide)
+//
+// NOTE: Divide operations require external multi-cycle divider.
+// This ALU provides div_start signal and expects div_result input.
 module alu (
     input  logic [31:0] a,       // first operand
     input  logic [31:0] b,       // second operand
@@ -9,7 +12,12 @@ module alu (
     output logic [31:0] result,  // answer
     output logic        zero,    // is result zero? (for BEQ, BNE)
     output logic        lt,      // a < b signed? (for BLT, BGE)
-    output logic        ltu      // a < b unsigned? (for BLTU, BGEU)
+    output logic        ltu,     // a < b unsigned? (for BLTU, BGEU)
+
+    // Divider interface
+    output logic        is_div_op,     // This is a divide operation
+    input  logic [31:0] div_quotient,  // From external divider
+    input  logic [31:0] div_remainder  // From external divider
 );
 
 // Operation codes - RV32I base
@@ -37,28 +45,17 @@ localparam OP_REMU   = 5'b10111;  // Remainder (unsigned)
 // Shift amount is bottom 5 bits of b (0-31)
 wire [4:0] shamt = b[4:0];
 
-// Multiply results (64-bit)
+// Multiply results (64-bit) - these are fine, DSP blocks handle them
 wire signed [63:0] mul_ss = $signed(a) * $signed(b);           // signed × signed
 wire signed [63:0] mul_su = $signed(a) * $signed({1'b0, b});   // signed × unsigned
 wire        [63:0] mul_uu = a * b;                              // unsigned × unsigned
 
-// Division results
-// Handle division by zero: RISC-V spec says DIV/REM return specific values
-wire div_by_zero = (b == 0);
-wire signed [31:0] a_signed = $signed(a);
-wire signed [31:0] b_signed = $signed(b);
+// Detect divide operations
+assign is_div_op = (op == OP_DIV) || (op == OP_DIVU) ||
+                   (op == OP_REM) || (op == OP_REMU);
 
-// Signed division overflow: -2^31 / -1 = overflow (return -2^31)
-wire div_overflow = (a == 32'h80000000) && (b == 32'hFFFFFFFF);
-
-wire [31:0] div_s  = div_by_zero ? 32'hFFFFFFFF :
-                     div_overflow ? 32'h80000000 :
-                     $signed(a_signed / b_signed);
-wire [31:0] div_u  = div_by_zero ? 32'hFFFFFFFF : a / b;
-wire [31:0] rem_s  = div_by_zero ? a :
-                     div_overflow ? 32'h0 :
-                     $signed(a_signed % b_signed);
-wire [31:0] rem_u  = div_by_zero ? a : a % b;
+// Is it a remainder operation?
+wire is_rem = (op == OP_REM) || (op == OP_REMU);
 
 always_comb begin
     case (op)
@@ -74,17 +71,17 @@ always_comb begin
         OP_SLT:  result = {31'b0, lt};
         OP_SLTU: result = {31'b0, ltu};
 
-        // M extension - Multiply
+        // M extension - Multiply (single cycle, uses DSP)
         OP_MUL:    result = mul_ss[31:0];   // Lower 32 bits
         OP_MULH:   result = mul_ss[63:32];  // Upper 32 bits (signed×signed)
         OP_MULHSU: result = mul_su[63:32];  // Upper 32 bits (signed×unsigned)
         OP_MULHU:  result = mul_uu[63:32];  // Upper 32 bits (unsigned×unsigned)
 
-        // M extension - Divide
-        OP_DIV:  result = div_s;
-        OP_DIVU: result = div_u;
-        OP_REM:  result = rem_s;
-        OP_REMU: result = rem_u;
+        // M extension - Divide (multi-cycle, from external divider)
+        OP_DIV:  result = div_quotient;
+        OP_DIVU: result = div_quotient;
+        OP_REM:  result = div_remainder;
+        OP_REMU: result = div_remainder;
 
         default: result = 0;
     endcase

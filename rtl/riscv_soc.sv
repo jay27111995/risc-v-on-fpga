@@ -344,7 +344,11 @@ module riscv_soc (
     logic mem_load_wait;
     wire hazard_load_data = mem_mem_read && mem_valid && mem_load_wait;
 
-    assign stall = hazard_load_use_ex1 || hazard_load_use_ex2 || hazard_load_use_mem || hazard_load_data;
+    // Divider stall: stall while multi-cycle divide is in progress
+    logic div_stall;
+
+    assign stall = hazard_load_use_ex1 || hazard_load_use_ex2 || hazard_load_use_mem ||
+                   hazard_load_data || div_stall;
     assign flush = mem_branch_taken;
 
     // Track when we need to wait for load data
@@ -464,7 +468,21 @@ module riscv_soc (
     logic [2:0]  ex1_mem_op;
 
     always_ff @(posedge clk) begin
-        if (cpu_rst || flush || stall) begin
+        if (cpu_rst || flush) begin
+            ex1_valid     <= 1'b0;
+            ex1_reg_write <= 1'b0;
+            ex1_mem_read  <= 1'b0;
+            ex1_mem_write <= 1'b0;
+            ex1_branch    <= 1'b0;
+            ex1_jump      <= 1'b0;
+            ex1_lui       <= 1'b0;
+            ex1_auipc     <= 1'b0;
+            ex1_ebreak    <= 1'b0;
+        end else if (div_stall) begin
+            // During divide stall: hold current values (don't advance or invalidate)
+            // This preserves the instruction waiting in EX1
+        end else if (stall) begin
+            // During other stalls (load-use hazards): insert bubble
             ex1_valid     <= 1'b0;
             ex1_reg_write <= 1'b0;
             ex1_mem_read  <= 1'b0;
@@ -565,7 +583,7 @@ module riscv_soc (
             ex2_lui       <= 1'b0;
             ex2_auipc     <= 1'b0;
             ex2_ebreak    <= 1'b0;
-        end else if (cpu_running && !hazard_load_data) begin
+        end else if (cpu_running && !hazard_load_data && !div_stall) begin
             ex2_pc        <= ex1_pc;
             ex2_alu_a     <= ex1_fwd_rs1;
             ex2_alu_b     <= ex1_alu_src ? ex1_imm : ex1_fwd_rs2;
@@ -597,15 +615,68 @@ module riscv_soc (
     logic        ex2_alu_lt;
     logic        ex2_alu_ltu;
 
-    alu alu_inst (
-        .a      (ex2_alu_a),
-        .b      (ex2_alu_b),
-        .op     (ex2_alu_op),
-        .result (ex2_alu_result),
-        .zero   (ex2_alu_zero),
-        .lt     (ex2_alu_lt),
-        .ltu    (ex2_alu_ltu)
+    // Divider signals
+    logic        alu_is_div_op;
+    wire  [31:0] div_quotient;
+    wire  [31:0] div_remainder;
+    logic        div_busy;
+    logic        div_done;
+    logic        div_start;
+    logic        div_running;  // Track if we're in the middle of a divide
+
+    // Detect signed divide operations
+    // DIV=10100, REM=10110 are signed; DIVU=10101, REMU=10111 are unsigned
+    wire div_is_signed = !ex2_alu_op[0];  // LSB=0 means signed
+
+    // Multi-cycle divider instance
+    divider divider_inst (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .start     (div_start),
+        .is_signed (div_is_signed),
+        .busy      (div_busy),
+        .done      (div_done),
+        .dividend  (ex2_alu_a),
+        .divisor   (ex2_alu_b),
+        .quotient  (div_quotient),
+        .remainder (div_remainder)
     );
+
+    // ALU instance - divide results come from external divider
+    alu alu_inst (
+        .a             (ex2_alu_a),
+        .b             (ex2_alu_b),
+        .op            (ex2_alu_op),
+        .result        (ex2_alu_result),
+        .zero          (ex2_alu_zero),
+        .lt            (ex2_alu_lt),
+        .ltu           (ex2_alu_ltu),
+        .is_div_op     (alu_is_div_op),
+        .div_quotient  (div_quotient),
+        .div_remainder (div_remainder)
+    );
+
+    // Divider control logic
+    // Start divider when a div op enters EX2 and we're not already running
+    // Track div_running to avoid restarting on every cycle
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            div_running <= 1'b0;
+        end else if (cpu_rst || flush) begin
+            div_running <= 1'b0;
+        end else if (div_done) begin
+            div_running <= 1'b0;
+        end else if (alu_is_div_op && ex2_valid && !div_running && !div_busy) begin
+            div_running <= 1'b1;
+        end
+    end
+
+    // Start pulse: when div op valid, not already running, divider not busy
+    assign div_start = alu_is_div_op && ex2_valid && !div_running && !div_busy && cpu_running;
+
+    // Stall while divider is running (busy or just started)
+    // Don't stall on the cycle when done - result is ready
+    assign div_stall = (div_busy || div_start) && !div_done;
 
     // LUI/AUIPC result: imm for LUI, PC+imm for AUIPC
     wire [31:0] ex2_lui_auipc_result = ex2_auipc ? (ex2_pc + ex2_imm) : ex2_imm;
@@ -637,7 +708,7 @@ module riscv_soc (
             mem_branch    <= 1'b0;
             mem_jump      <= 1'b0;
             mem_ebreak    <= 1'b0;
-        end else if (cpu_running && !hazard_load_data) begin
+        end else if (cpu_running && !hazard_load_data && !div_stall) begin
             // Normal advance from EX2 to MEM
             mem_alu_result <= ex2_result;
             mem_store_data <= ex2_rs2_fwd;
@@ -658,7 +729,7 @@ module riscv_soc (
             mem_ebreak     <= ex2_ebreak;
             mem_valid      <= ex2_valid;
         end
-        // When hazard_load_data: MEM stage holds, waiting for DMEM data
+        // When hazard_load_data or div_stall: MEM stage holds
     end
 
     // =========================================================================
