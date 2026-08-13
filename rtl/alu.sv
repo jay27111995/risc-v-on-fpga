@@ -1,10 +1,13 @@
 // ALU - Arithmetic Logic Unit
+// ============================================================================
 // The "calculator" of the CPU
 // Takes two 32-bit inputs, performs operation based on 'op'
 // Supports RV32I base + M extension (multiply/divide)
 //
-// NOTE: Divide operations require external multi-cycle divider.
-// This ALU provides div_start signal and expects div_result input.
+// NOTE: Multiply and divide operations use external pipelined units.
+// This ALU detects these ops and expects results from external modules.
+// ============================================================================
+
 module alu (
     input  logic [31:0] a,       // first operand
     input  logic [31:0] b,       // second operand
@@ -13,6 +16,10 @@ module alu (
     output logic        zero,    // is result zero? (for BEQ, BNE)
     output logic        lt,      // a < b signed? (for BLT, BGE)
     output logic        ltu,     // a < b unsigned? (for BLTU, BGEU)
+
+    // Multiplier interface
+    output logic        is_mul_op,     // This is a multiply operation
+    input  logic [31:0] mul_result,    // From external multiplier
 
     // Divider interface
     output logic        is_div_op,     // This is a divide operation
@@ -45,17 +52,13 @@ localparam OP_REMU   = 5'b10111;  // Remainder (unsigned)
 // Shift amount is bottom 5 bits of b (0-31)
 wire [4:0] shamt = b[4:0];
 
-// Multiply results (64-bit) - these are fine, DSP blocks handle them
-wire signed [63:0] mul_ss = $signed(a) * $signed(b);           // signed × signed
-wire signed [63:0] mul_su = $signed(a) * $signed({1'b0, b});   // signed × unsigned
-wire        [63:0] mul_uu = a * b;                              // unsigned × unsigned
+// Detect multiply operations
+assign is_mul_op = (op == OP_MUL) || (op == OP_MULH) ||
+                   (op == OP_MULHSU) || (op == OP_MULHU);
 
 // Detect divide operations
 assign is_div_op = (op == OP_DIV) || (op == OP_DIVU) ||
                    (op == OP_REM) || (op == OP_REMU);
-
-// Is it a remainder operation?
-wire is_rem = (op == OP_REM) || (op == OP_REMU);
 
 always_comb begin
     case (op)
@@ -71,13 +74,13 @@ always_comb begin
         OP_SLT:  result = {31'b0, lt};
         OP_SLTU: result = {31'b0, ltu};
 
-        // M extension - Multiply (single cycle, uses DSP)
-        OP_MUL:    result = mul_ss[31:0];   // Lower 32 bits
-        OP_MULH:   result = mul_ss[63:32];  // Upper 32 bits (signed×signed)
-        OP_MULHSU: result = mul_su[63:32];  // Upper 32 bits (signed×unsigned)
-        OP_MULHU:  result = mul_uu[63:32];  // Upper 32 bits (unsigned×unsigned)
+        // M extension - Multiply (from external pipelined multiplier)
+        OP_MUL:    result = mul_result;
+        OP_MULH:   result = mul_result;
+        OP_MULHSU: result = mul_result;
+        OP_MULHU:  result = mul_result;
 
-        // M extension - Divide (multi-cycle, from external divider)
+        // M extension - Divide (from external multi-cycle divider)
         OP_DIV:  result = div_quotient;
         OP_DIVU: result = div_quotient;
         OP_REM:  result = div_remainder;
