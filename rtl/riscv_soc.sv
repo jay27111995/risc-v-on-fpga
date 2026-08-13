@@ -344,11 +344,14 @@ module riscv_soc (
     logic mem_load_wait;
     wire hazard_load_data = mem_mem_read && mem_valid && mem_load_wait;
 
+    // Multiplier stall: stall 1 cycle for pipelined multiply
+    logic mul_stall;
+
     // Divider stall: stall while multi-cycle divide is in progress
     logic div_stall;
 
     assign stall = hazard_load_use_ex1 || hazard_load_use_ex2 || hazard_load_use_mem ||
-                   hazard_load_data || div_stall;
+                   hazard_load_data || mul_stall || div_stall;
     assign flush = mem_branch_taken;
 
     // Track when we need to wait for load data
@@ -478,8 +481,8 @@ module riscv_soc (
             ex1_lui       <= 1'b0;
             ex1_auipc     <= 1'b0;
             ex1_ebreak    <= 1'b0;
-        end else if (div_stall) begin
-            // During divide stall: hold current values (don't advance or invalidate)
+        end else if (mul_stall || div_stall) begin
+            // During multiply/divide stall: hold current values (don't advance or invalidate)
             // This preserves the instruction waiting in EX1
         end else if (stall) begin
             // During other stalls (load-use hazards): insert bubble
@@ -583,7 +586,7 @@ module riscv_soc (
             ex2_lui       <= 1'b0;
             ex2_auipc     <= 1'b0;
             ex2_ebreak    <= 1'b0;
-        end else if (cpu_running && !hazard_load_data && !div_stall) begin
+        end else if (cpu_running && !hazard_load_data && !mul_stall && !div_stall) begin
             ex2_pc        <= ex1_pc;
             ex2_alu_a     <= ex1_fwd_rs1;
             ex2_alu_b     <= ex1_alu_src ? ex1_imm : ex1_fwd_rs2;
@@ -615,6 +618,51 @@ module riscv_soc (
     logic        ex2_alu_lt;
     logic        ex2_alu_ltu;
 
+    // Multiplier signals
+    logic        alu_is_mul_op;
+    wire  [31:0] mul_result;
+    logic        mul_busy;
+    logic        mul_done;
+    logic        mul_start;
+    logic        mul_running;  // Track if we're in the middle of a multiply
+
+    // Detect multiply operation type for multiplier
+    // MUL=10000, MULH=10001, MULHSU=10010, MULHU=10011
+    wire [1:0] mul_op_type = ex2_alu_op[1:0];  // 00=MUL, 01=MULH, 10=MULHSU, 11=MULHU
+
+    // Pipelined multiplier instance (2 cycles)
+    multiplier multiplier_inst (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .start  (mul_start),
+        .mul_op (mul_op_type),
+        .busy   (mul_busy),
+        .done   (mul_done),
+        .a      (ex2_alu_a),
+        .b      (ex2_alu_b),
+        .result (mul_result)
+    );
+
+    // Multiplier control logic
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            mul_running <= 1'b0;
+        end else if (cpu_rst || flush) begin
+            mul_running <= 1'b0;
+        end else if (mul_done) begin
+            mul_running <= 1'b0;
+        end else if (alu_is_mul_op && ex2_valid && !mul_running && !mul_busy) begin
+            mul_running <= 1'b1;
+        end
+    end
+
+    // Start pulse: when mul op valid, not already running, multiplier not busy
+    assign mul_start = alu_is_mul_op && ex2_valid && !mul_running && !mul_busy && cpu_running;
+
+    // Stall while multiplier is running (busy or just started)
+    // Don't stall on the cycle when done - result is ready
+    assign mul_stall = (mul_busy || mul_start) && !mul_done;
+
     // Divider signals
     logic        alu_is_div_op;
     wire  [31:0] div_quotient;
@@ -642,7 +690,7 @@ module riscv_soc (
         .remainder (div_remainder)
     );
 
-    // ALU instance - divide results come from external divider
+    // ALU instance - multiply and divide results come from external units
     alu alu_inst (
         .a             (ex2_alu_a),
         .b             (ex2_alu_b),
@@ -651,6 +699,8 @@ module riscv_soc (
         .zero          (ex2_alu_zero),
         .lt            (ex2_alu_lt),
         .ltu           (ex2_alu_ltu),
+        .is_mul_op     (alu_is_mul_op),
+        .mul_result    (mul_result),
         .is_div_op     (alu_is_div_op),
         .div_quotient  (div_quotient),
         .div_remainder (div_remainder)
@@ -708,7 +758,7 @@ module riscv_soc (
             mem_branch    <= 1'b0;
             mem_jump      <= 1'b0;
             mem_ebreak    <= 1'b0;
-        end else if (cpu_running && !hazard_load_data && !div_stall) begin
+        end else if (cpu_running && !hazard_load_data && !mul_stall && !div_stall) begin
             // Normal advance from EX2 to MEM
             mem_alu_result <= ex2_result;
             mem_store_data <= ex2_rs2_fwd;
@@ -729,7 +779,7 @@ module riscv_soc (
             mem_ebreak     <= ex2_ebreak;
             mem_valid      <= ex2_valid;
         end
-        // When hazard_load_data or div_stall: MEM stage holds
+        // When hazard_load_data, mul_stall, or div_stall: MEM stage holds
     end
 
     // =========================================================================
