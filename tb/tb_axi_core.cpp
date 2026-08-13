@@ -1699,7 +1699,7 @@ int main(int argc, char** argv) {
 
         tb.axi_write(0x80000, 0);
         tb.axi_write(0x00, 0x01);
-        for (int i = 0; i < 50; i++) tb.tick();
+        for (int i = 0; i < 150; i++) tb.tick();  // Need 32+ cycles for divider
 
         uint32_t div_result = (uint32_t)tb.axi_read(0x80000);
         printf("  42 / 7 = %u (expected 6)\n", div_result);
@@ -1722,7 +1722,7 @@ int main(int argc, char** argv) {
 
         tb.axi_write(0x80000, 0);
         tb.axi_write(0x00, 0x01);
-        for (int i = 0; i < 50; i++) tb.tick();
+        for (int i = 0; i < 150; i++) tb.tick();  // Need 32+ cycles for divider
 
         uint32_t divu_result = (uint32_t)tb.axi_read(0x80000);
         printf("  100 / 10 = %u (expected 10)\n", divu_result);
@@ -1745,7 +1745,7 @@ int main(int argc, char** argv) {
 
         tb.axi_write(0x80000, 0);
         tb.axi_write(0x00, 0x01);
-        for (int i = 0; i < 50; i++) tb.tick();
+        for (int i = 0; i < 150; i++) tb.tick();  // Need 32+ cycles for divider
 
         uint32_t rem_result = (uint32_t)tb.axi_read(0x80000);
         printf("  47 %% 7 = %u (expected 5)\n", rem_result);
@@ -1768,7 +1768,7 @@ int main(int argc, char** argv) {
 
         tb.axi_write(0x80000, 0);
         tb.axi_write(0x00, 0x01);
-        for (int i = 0; i < 50; i++) tb.tick();
+        for (int i = 0; i < 150; i++) tb.tick();  // Need 32+ cycles for divider
 
         uint32_t remu_result = (uint32_t)tb.axi_read(0x80000);
         printf("  103 %% 10 = %u (expected 3)\n", remu_result);
@@ -1790,7 +1790,7 @@ int main(int argc, char** argv) {
 
         tb.axi_write(0x80000, 0);
         tb.axi_write(0x00, 0x01);
-        for (int i = 0; i < 50; i++) tb.tick();
+        for (int i = 0; i < 150; i++) tb.tick();  // Need 32+ cycles for divider
 
         uint32_t divzero_result = (uint32_t)tb.axi_read(0x80000);
         printf("  42 / 0 = 0x%08X (expected 0xFFFFFFFF)\n", divzero_result);
