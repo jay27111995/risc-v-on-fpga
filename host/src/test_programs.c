@@ -12,7 +12,6 @@ static int test_sum(void) {
 
   cpu_reset();
   init_memory();
-  cpulog_clear_with_imem();  // Enable IFETCH logging
 
   // Try to load sum.bin
   const char *paths[] = {"../sw/sum.bin", "sw/sum.bin", "sum.bin", NULL};
@@ -61,7 +60,6 @@ static int test_factorial(void) {
 
   cpu_reset();
   init_memory();
-  cpulog_clear_with_imem();  // Enable IFETCH logging
 
   // Try to load factorial.bin
   const char *paths[] = {"../sw/factorial.bin", "sw/factorial.bin",
