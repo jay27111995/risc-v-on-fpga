@@ -186,11 +186,11 @@ static void cpulog_print_entry(int idx, const cpulog_entry_t *entry,
     uint64_t offset_ns = CYCLES_TO_NS(offset);
     if (entry->type == CPULOG_TYPE_IFETCH) {
         // For instruction fetches, decode the instruction
-        printf("    [%3d] +%6lu cycles (+%6lu ns) %s addr=0x%05X  %s\n",
+        printf("    [%3d] +%6lu cycles (+%6lu ns) %s 0x%05X  %s\n",
                idx, offset, offset_ns, cpulog_type_names[entry->type & 3],
                entry->address, riscv_decode(entry->data));
     } else {
-        printf("    [%3d] +%6lu cycles (+%6lu ns) %s addr=0x%05X data=0x%08X\n",
+        printf("    [%3d] +%6lu cycles (+%6lu ns) %s 0x%05X  data=0x%08X\n",
                idx, offset, offset_ns, cpulog_type_names[entry->type & 3],
                entry->address, entry->data);
     }
