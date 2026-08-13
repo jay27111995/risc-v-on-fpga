@@ -184,9 +184,16 @@ static void cpulog_print_entry(int idx, const cpulog_entry_t *entry,
                                uint64_t base_cycle) {
     uint64_t offset = entry->timestamp - base_cycle;
     uint64_t offset_ns = CYCLES_TO_NS(offset);
-    printf("    [%3d] +%6lu cycles (+%6lu ns) %s addr=0x%05X data=0x%08X\n",
-           idx, offset, offset_ns, cpulog_type_names[entry->type & 3],
-           entry->address, entry->data);
+    if (entry->type == CPULOG_TYPE_IFETCH) {
+        // For instruction fetches, decode the instruction
+        printf("    [%3d] +%6lu cycles (+%6lu ns) %s addr=0x%05X  %s\n",
+               idx, offset, offset_ns, cpulog_type_names[entry->type & 3],
+               entry->address, riscv_decode(entry->data));
+    } else {
+        printf("    [%3d] +%6lu cycles (+%6lu ns) %s addr=0x%05X data=0x%08X\n",
+               idx, offset, offset_ns, cpulog_type_names[entry->type & 3],
+               entry->address, entry->data);
+    }
 }
 
 void cpulog_dump(int max_entries) {
@@ -309,4 +316,209 @@ int common_init(int argc, char *argv[], const char *prog_name) {
 
 void common_cleanup(void) {
     vfio_cleanup();
+}
+
+// ----------------------------------------------------------------------------
+// Instruction Decoder
+// ----------------------------------------------------------------------------
+
+// Register names
+static const char *reg_names[] = {
+    "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
+    "s0",   "s1", "a0", "a1", "a2", "a3", "a4", "a5",
+    "a6",   "a7", "s2", "s3", "s4", "s5", "s6", "s7",
+    "s8",   "s9", "s10", "s11", "t3", "t4", "t5", "t6"
+};
+
+// Extract instruction fields
+#define OPCODE(i)  ((i) & 0x7F)
+#define RD(i)      (((i) >> 7) & 0x1F)
+#define FUNCT3(i)  (((i) >> 12) & 0x7)
+#define RS1(i)     (((i) >> 15) & 0x1F)
+#define RS2(i)     (((i) >> 20) & 0x1F)
+#define FUNCT7(i)  (((i) >> 25) & 0x7F)
+
+// Sign extend
+static int32_t sign_extend(uint32_t val, int bits) {
+    uint32_t sign_bit = 1U << (bits - 1);
+    return (val ^ sign_bit) - sign_bit;
+}
+
+// Immediate extraction
+static int32_t imm_i(uint32_t i) {
+    return sign_extend(i >> 20, 12);
+}
+
+static int32_t imm_s(uint32_t i) {
+    uint32_t imm = ((i >> 7) & 0x1F) | (((i >> 25) & 0x7F) << 5);
+    return sign_extend(imm, 12);
+}
+
+static int32_t imm_b(uint32_t i) {
+    uint32_t imm = (((i >> 8) & 0xF) << 1) | (((i >> 25) & 0x3F) << 5) |
+                   (((i >> 7) & 0x1) << 11) | (((i >> 31) & 0x1) << 12);
+    return sign_extend(imm, 13);
+}
+
+static int32_t imm_u(uint32_t i) {
+    return i & 0xFFFFF000;
+}
+
+static int32_t imm_j(uint32_t i) {
+    uint32_t imm = (((i >> 21) & 0x3FF) << 1) | (((i >> 20) & 0x1) << 11) |
+                   (((i >> 12) & 0xFF) << 12) | (((i >> 31) & 0x1) << 20);
+    return sign_extend(imm, 21);
+}
+
+const char *riscv_decode(uint32_t instr) {
+    static char buf[64];
+
+    uint32_t opcode = OPCODE(instr);
+    uint32_t rd = RD(instr);
+    uint32_t rs1 = RS1(instr);
+    uint32_t rs2 = RS2(instr);
+    uint32_t funct3 = FUNCT3(instr);
+    uint32_t funct7 = FUNCT7(instr);
+
+    switch (opcode) {
+    case 0x37:  // LUI
+        snprintf(buf, sizeof(buf), "lui %s, 0x%X", reg_names[rd], (uint32_t)imm_u(instr) >> 12);
+        break;
+    case 0x17:  // AUIPC
+        snprintf(buf, sizeof(buf), "auipc %s, 0x%X", reg_names[rd], (uint32_t)imm_u(instr) >> 12);
+        break;
+    case 0x6F:  // JAL
+        snprintf(buf, sizeof(buf), "jal %s, %d", reg_names[rd], imm_j(instr));
+        break;
+    case 0x67:  // JALR
+        snprintf(buf, sizeof(buf), "jalr %s, %s, %d", reg_names[rd], reg_names[rs1], imm_i(instr));
+        break;
+    case 0x63:  // Branch
+        {
+            const char *op;
+            switch (funct3) {
+            case 0: op = "beq"; break;
+            case 1: op = "bne"; break;
+            case 4: op = "blt"; break;
+            case 5: op = "bge"; break;
+            case 6: op = "bltu"; break;
+            case 7: op = "bgeu"; break;
+            default: op = "b???"; break;
+            }
+            snprintf(buf, sizeof(buf), "%s %s, %s, %d", op, reg_names[rs1], reg_names[rs2], imm_b(instr));
+        }
+        break;
+    case 0x03:  // Load
+        {
+            const char *op;
+            switch (funct3) {
+            case 0: op = "lb"; break;
+            case 1: op = "lh"; break;
+            case 2: op = "lw"; break;
+            case 4: op = "lbu"; break;
+            case 5: op = "lhu"; break;
+            default: op = "l???"; break;
+            }
+            snprintf(buf, sizeof(buf), "%s %s, %d(%s)", op, reg_names[rd], imm_i(instr), reg_names[rs1]);
+        }
+        break;
+    case 0x23:  // Store
+        {
+            const char *op;
+            switch (funct3) {
+            case 0: op = "sb"; break;
+            case 1: op = "sh"; break;
+            case 2: op = "sw"; break;
+            default: op = "s???"; break;
+            }
+            snprintf(buf, sizeof(buf), "%s %s, %d(%s)", op, reg_names[rs2], imm_s(instr), reg_names[rs1]);
+        }
+        break;
+    case 0x13:  // I-type ALU
+        {
+            int32_t imm = imm_i(instr);
+            switch (funct3) {
+            case 0:
+                if (rd == 0 && rs1 == 0 && imm == 0)
+                    snprintf(buf, sizeof(buf), "nop");
+                else
+                    snprintf(buf, sizeof(buf), "addi %s, %s, %d", reg_names[rd], reg_names[rs1], imm);
+                break;
+            case 1:
+                snprintf(buf, sizeof(buf), "slli %s, %s, %d", reg_names[rd], reg_names[rs1], rs2);
+                break;
+            case 2:
+                snprintf(buf, sizeof(buf), "slti %s, %s, %d", reg_names[rd], reg_names[rs1], imm);
+                break;
+            case 3:
+                snprintf(buf, sizeof(buf), "sltiu %s, %s, %d", reg_names[rd], reg_names[rs1], imm);
+                break;
+            case 4:
+                snprintf(buf, sizeof(buf), "xori %s, %s, %d", reg_names[rd], reg_names[rs1], imm);
+                break;
+            case 5:
+                if (funct7 & 0x20)
+                    snprintf(buf, sizeof(buf), "srai %s, %s, %d", reg_names[rd], reg_names[rs1], rs2);
+                else
+                    snprintf(buf, sizeof(buf), "srli %s, %s, %d", reg_names[rd], reg_names[rs1], rs2);
+                break;
+            case 6:
+                snprintf(buf, sizeof(buf), "ori %s, %s, %d", reg_names[rd], reg_names[rs1], imm);
+                break;
+            case 7:
+                snprintf(buf, sizeof(buf), "andi %s, %s, %d", reg_names[rd], reg_names[rs1], imm);
+                break;
+            }
+        }
+        break;
+    case 0x33:  // R-type ALU
+        if (funct7 == 0x01) {
+            // M extension
+            const char *op;
+            switch (funct3) {
+            case 0: op = "mul"; break;
+            case 1: op = "mulh"; break;
+            case 2: op = "mulhsu"; break;
+            case 3: op = "mulhu"; break;
+            case 4: op = "div"; break;
+            case 5: op = "divu"; break;
+            case 6: op = "rem"; break;
+            case 7: op = "remu"; break;
+            default: op = "m???"; break;
+            }
+            snprintf(buf, sizeof(buf), "%s %s, %s, %s", op, reg_names[rd], reg_names[rs1], reg_names[rs2]);
+        } else {
+            const char *op;
+            switch (funct3) {
+            case 0: op = (funct7 & 0x20) ? "sub" : "add"; break;
+            case 1: op = "sll"; break;
+            case 2: op = "slt"; break;
+            case 3: op = "sltu"; break;
+            case 4: op = "xor"; break;
+            case 5: op = (funct7 & 0x20) ? "sra" : "srl"; break;
+            case 6: op = "or"; break;
+            case 7: op = "and"; break;
+            default: op = "???"; break;
+            }
+            snprintf(buf, sizeof(buf), "%s %s, %s, %s", op, reg_names[rd], reg_names[rs1], reg_names[rs2]);
+        }
+        break;
+    case 0x73:  // System
+        if (instr == 0x00100073)
+            snprintf(buf, sizeof(buf), "ebreak");
+        else if (instr == 0x00000073)
+            snprintf(buf, sizeof(buf), "ecall");
+        else
+            snprintf(buf, sizeof(buf), "system 0x%08X", instr);
+        break;
+    default:
+        snprintf(buf, sizeof(buf), "??? 0x%08X", instr);
+        break;
+    }
+
+    return buf;
+}
+
+void riscv_print_instr(uint32_t addr, uint32_t instr) {
+    printf("0x%05X: %08X  %s\n", addr, instr, riscv_decode(instr));
 }

@@ -80,11 +80,10 @@ int main(int argc, char *argv[]) {
   };
 
   printf("Loading program:\n");
-  printf("  0x00: 0x%08X  ADDI x1, x0, 5\n", prog2[0]);
-  printf("  0x04: 0x%08X  ADDI x2, x0, 3\n", prog2[1]);
-  printf("  0x08: 0x%08X  ADD  x3, x1, x2\n", prog2[2]);
-  printf("  0x0C: 0x%08X  SW   x3, 0(x0)\n", prog2[3]);
-  printf("  0x10: 0x%08X  EBREAK\n\n", prog2[4]);
+  for (size_t i = 0; i < sizeof(prog2) / sizeof(prog2[0]); i++) {
+    riscv_print_instr(i * 4, prog2[i]);
+  }
+  printf("\n");
 
   for (size_t i = 0; i < sizeof(prog2) / sizeof(prog2[0]); i++) {
     write_imem(i, prog2[i]);

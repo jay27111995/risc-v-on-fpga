@@ -12,6 +12,7 @@ static int test_sum(void) {
 
   cpu_reset();
   init_memory();
+  cpulog_clear_with_imem();  // Enable IFETCH logging
 
   // Try to load sum.bin
   const char *paths[] = {"../sw/sum.bin", "sw/sum.bin", "sum.bin", NULL};
@@ -43,8 +44,8 @@ static int test_sum(void) {
   printf("  [6] sum << 2   = %d (expected 220)\n", read_dmem(6));
 
   uint32_t count = cpulog_get_count();
-  printf("\nCPU Log (%u entries, showing stores):\n", count);
-  cpulog_dump(32);
+  printf("\nCPU Log (%u entries, showing first 64):\n", count);
+  cpulog_dump(64);
 
   printf("\n");
   print_perf_counters();
@@ -60,6 +61,7 @@ static int test_factorial(void) {
 
   cpu_reset();
   init_memory();
+  cpulog_clear_with_imem();  // Enable IFETCH logging
 
   // Try to load factorial.bin
   const char *paths[] = {"../sw/factorial.bin", "sw/factorial.bin",
@@ -87,8 +89,8 @@ static int test_factorial(void) {
   printf("\nDMEM[0] = %d (expected 120 for 5!)\n", result);
 
   uint32_t count = cpulog_get_count();
-  printf("\nCPU Log (%u entries):\n", count);
-  cpulog_dump(32);
+  printf("\nCPU Log (%u entries, showing first 64):\n", count);
+  cpulog_dump(64);
 
   printf("\n");
   print_perf_counters();

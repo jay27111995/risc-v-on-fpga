@@ -129,6 +129,17 @@ void print_perf_counters(void);
 int load_program_file(const char *filename);
 
 // ----------------------------------------------------------------------------
+// Instruction Decoder
+// ----------------------------------------------------------------------------
+
+// Decode a RISC-V instruction into a human-readable string
+// Returns pointer to static buffer (not thread-safe)
+const char *riscv_decode(uint32_t instr);
+
+// Decode and print instruction with address
+void riscv_print_instr(uint32_t addr, uint32_t instr);
+
+// ----------------------------------------------------------------------------
 // Init/Cleanup
 // ----------------------------------------------------------------------------
 
