@@ -12,7 +12,7 @@
 // Constants
 // ----------------------------------------------------------------------------
 
-const char *cpulog_type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???"};
+const char *cpulog_type_names[] = {"IFETCH", "DLOAD ", "DSTORE", "???   "};
 
 // ----------------------------------------------------------------------------
 // Memory Access
