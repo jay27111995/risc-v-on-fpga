@@ -26,7 +26,9 @@
 // Send a single character
 static inline void uart_putc(char c) {
     while (TX_READY);  // Wait for host to consume previous
-    TX_BUFFER[0] = c;
+    // Write as word to avoid byte store issues
+    volatile unsigned int *tx_buf = (volatile unsigned int *)0x100;
+    *tx_buf = (unsigned int)(unsigned char)c;
     TX_LEN = 1;
     TX_READY = 1;
 }
