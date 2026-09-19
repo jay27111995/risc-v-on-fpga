@@ -98,16 +98,13 @@ int main(int argc, char *argv[]) {
         // Check for CPU output (TX_READY == 1)
         if (read32(TX_READY_OFF) == 1) {
             int len = read32(TX_LEN_OFF);
-            printf("[DEBUG] TX_READY=1, len=%d\n", len);
             if (len > 0 && len <= UART_BUF_SIZE) {
                 // Read buffer word by word, extract bytes
                 for (int i = 0; i < len; i++) {
-                    uint32_t word_off = (i / 4) * 4;  // Word-aligned offset
-                    uint32_t byte_pos = i % 4;        // Byte position within word
+                    uint32_t word_off = (i / 4) * 4;
+                    uint32_t byte_pos = i % 4;
                     uint32_t word = read32(TX_BUFFER_OFF + word_off);
                     char c = (word >> (byte_pos * 8)) & 0xFF;
-                    if (i < 8) printf("[DEBUG] i=%d word_off=%d word=0x%08X byte_pos=%d c='%c'(0x%02X)\n", 
-                                      i, word_off, word, byte_pos, c >= 32 ? c : '?', (unsigned char)c);
                     putchar(c);
                 }
                 fflush(stdout);
