@@ -1,5 +1,7 @@
 # RISC-V on FPGA
 
+> ⚠️ **Disclaimer**: This project contains AI-generated code (Claude/Kiro assisted).
+
 A complete RV32I RISC-V CPU with PCIe BAR interface, targeting Intel Agilex 7 FPGA.
 
 ## Status: ✅ Working
