@@ -13,9 +13,13 @@ int main(void) {
     
     uart_putc('B');
     
-    // Read back once
+    // Read back and print full hex
     unsigned int v = *rx_ready_ptr;
-    uart_putc('0' + (v & 0xF));
+    uart_putc('=');
+    for (int i = 7; i >= 0; i--) {
+        int nibble = (v >> (i * 4)) & 0xF;
+        uart_putc(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
+    }
     uart_putc('\n');
     
     // Poll
