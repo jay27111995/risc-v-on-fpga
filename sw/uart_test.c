@@ -4,35 +4,33 @@
 #include "uart.h"
 
 int main(void) {
-    // Debug: print raw values
     uart_putc('H');
     uart_putc('i');
-    uart_putc('!');
     uart_putc('\n');
     
     // Wait for input
     while (!RX_READY);
     
-    // Read RX_LEN raw value and print as hex
-    unsigned int len_raw = RX_LEN;
-    uart_putc('L');
-    uart_putc(':');
-    // Print as 8 hex digits
-    for (int i = 7; i >= 0; i--) {
-        int nibble = (len_raw >> (i * 4)) & 0xF;
-        uart_putc(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
-    }
+    uart_putc('G');
+    uart_putc('o');
+    uart_putc('t');
     uart_putc('\n');
     
-    // Read RX_BUFFER[0] raw word
-    volatile unsigned int *rx_words = (volatile unsigned int *)0x300;
-    unsigned int buf_raw = rx_words[0];
-    uart_putc('B');
-    uart_putc(':');
-    for (int i = 7; i >= 0; i--) {
-        int nibble = (buf_raw >> (i * 4)) & 0xF;
-        uart_putc(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
-    }
+    // Read RX_LEN - just print low nibble
+    unsigned int len = RX_LEN;
+    int n = len & 0xF;
+    uart_putc(n < 10 ? '0' + n : 'A' + n - 10);
+    uart_putc('\n');
+    
+    // Read RX_BUFFER word at 0x300
+    volatile unsigned int *dmem = (volatile unsigned int *)0;
+    unsigned int word = dmem[0x300 / 4];  // Address 0x300 / 4 = word index 0xC0
+    
+    // Print first byte
+    char c = word & 0xFF;
+    uart_putc('[');
+    uart_putc(c);
+    uart_putc(']');
     uart_putc('\n');
     
     RX_READY = 0;
