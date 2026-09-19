@@ -20,7 +20,7 @@ int sum_to_n(int n) {
     return result;
 }
 
-void _start(void) {
+void main(void) {
     // Compute sum(1..10) = 55
     int result = sum_to_n(10);
     

@@ -13,7 +13,7 @@ int factorial(int n) {
     return result;
 }
 
-void _start(void) {
+void main(void) {
     // Compute factorial(5) = 120
     int result = factorial(5);
     
