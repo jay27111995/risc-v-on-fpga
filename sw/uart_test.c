@@ -4,48 +4,46 @@
 #include "uart.h"
 
 int main(void) {
-    volatile unsigned int *rx_ready_ptr = (volatile unsigned int *)0x7FF0;
+    // Try address 0x600 (in middle of DMEM, away from TX/RX regions)
+    volatile unsigned int *test_ptr = (volatile unsigned int *)0x600;
     
     uart_putc('A');
     
-    *rx_ready_ptr = 0;
+    *test_ptr = 0;
     
     uart_putc('B');
     
     // Read back 10 times and print each
     uart_putc('[');
     for (int i = 0; i < 10; i++) {
-        unsigned int v = *rx_ready_ptr;
+        unsigned int v = *test_ptr;
         uart_putc(v == 0 ? '0' : '1');
     }
     uart_putc(']');
     uart_putc('\n');
     
-    // Now spin and count consecutive zeros vs non-zeros
+    // Now spin and count
     int zeros = 0;
     int ones = 0;
-    for (int i = 0; i < 100000; i++) {
-        if (*rx_ready_ptr == 0) zeros++;
+    for (int i = 0; i < 10000; i++) {  // reduced to 10000
+        if (*test_ptr == 0) zeros++;
         else ones++;
     }
     
     // Print stats
     uart_putc('Z');
     uart_putc('=');
-    // Print zeros as decimal (rough)
-    if (zeros >= 10000) uart_putc('0' + (zeros / 10000) % 10);
-    if (zeros >= 1000) uart_putc('0' + (zeros / 1000) % 10);
-    if (zeros >= 100) uart_putc('0' + (zeros / 100) % 10);
-    if (zeros >= 10) uart_putc('0' + (zeros / 10) % 10);
+    uart_putc('0' + (zeros / 1000) % 10);
+    uart_putc('0' + (zeros / 100) % 10);
+    uart_putc('0' + (zeros / 10) % 10);
     uart_putc('0' + zeros % 10);
     uart_putc('\n');
     
     uart_putc('O');
     uart_putc('=');
-    if (ones >= 10000) uart_putc('0' + (ones / 10000) % 10);
-    if (ones >= 1000) uart_putc('0' + (ones / 1000) % 10);
-    if (ones >= 100) uart_putc('0' + (ones / 100) % 10);
-    if (ones >= 10) uart_putc('0' + (ones / 10) % 10);
+    uart_putc('0' + (ones / 1000) % 10);
+    uart_putc('0' + (ones / 100) % 10);
+    uart_putc('0' + (ones / 10) % 10);
     uart_putc('0' + ones % 10);
     uart_putc('\n');
     
