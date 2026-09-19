@@ -4,7 +4,7 @@
 #include "uart.h"
 
 int main(void) {
-    // TX and RX_READY work - now test reading data
+    // Debug: print raw values
     uart_putc('H');
     uart_putc('i');
     uart_putc('!');
@@ -13,32 +13,29 @@ int main(void) {
     // Wait for input
     while (!RX_READY);
     
-    // Read length
-    int len = RX_LEN;
+    // Read RX_LEN raw value and print as hex
+    unsigned int len_raw = RX_LEN;
     uart_putc('L');
-    uart_putc('=');
-    uart_putc('0' + len);
+    uart_putc(':');
+    // Print as 8 hex digits
+    for (int i = 7; i >= 0; i--) {
+        int nibble = (len_raw >> (i * 4)) & 0xF;
+        uart_putc(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
+    }
     uart_putc('\n');
     
-    // Read first byte (word-aligned)
+    // Read RX_BUFFER[0] raw word
     volatile unsigned int *rx_words = (volatile unsigned int *)0x300;
-    unsigned int word0 = rx_words[0];
-    char c0 = word0 & 0xFF;
-    
-    // Echo it
-    uart_putc('C');
-    uart_putc('=');
-    uart_putc(c0);
+    unsigned int buf_raw = rx_words[0];
+    uart_putc('B');
+    uart_putc(':');
+    for (int i = 7; i >= 0; i--) {
+        int nibble = (buf_raw >> (i * 4)) & 0xF;
+        uart_putc(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
+    }
     uart_putc('\n');
     
-    // Clear RX_READY
     RX_READY = 0;
-    
-    uart_putc('D');
-    uart_putc('o');
-    uart_putc('n');
-    uart_putc('e');
-    uart_putc('\n');
     
     while (1);
     return 0;
