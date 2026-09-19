@@ -4,33 +4,40 @@
 #include "uart.h"
 
 int main(void) {
-    // TX works - now test RX_READY polling
+    // TX and RX_READY work - now test reading data
     uart_putc('H');
     uart_putc('i');
     uart_putc('!');
     uart_putc('\n');
     
-    // Print what CPU sees for RX_READY (as hex digit)
-    uart_putc('R');
-    uart_putc('X');
+    // Wait for input
+    while (!RX_READY);
+    
+    // Read length
+    int len = RX_LEN;
+    uart_putc('L');
     uart_putc('=');
-    uart_putc('0' + (RX_READY & 0xF));
+    uart_putc('0' + len);
     uart_putc('\n');
     
-    // Now wait for RX_READY to become 1
-    uart_putc('W');
-    uart_putc('a');
-    uart_putc('i');
-    uart_putc('t');
+    // Read first byte (word-aligned)
+    volatile unsigned int *rx_words = (volatile unsigned int *)0x300;
+    unsigned int word0 = rx_words[0];
+    char c0 = word0 & 0xFF;
+    
+    // Echo it
+    uart_putc('C');
+    uart_putc('=');
+    uart_putc(c0);
     uart_putc('\n');
     
-    while (!RX_READY);  // Block here
+    // Clear RX_READY
+    RX_READY = 0;
     
-    // If we get here, RX_READY was set
-    uart_putc('G');
+    uart_putc('D');
     uart_putc('o');
-    uart_putc('t');
-    uart_putc('!');
+    uart_putc('n');
+    uart_putc('e');
     uart_putc('\n');
     
     while (1);
