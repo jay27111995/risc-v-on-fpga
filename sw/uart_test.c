@@ -4,7 +4,8 @@
 #include "uart.h"
 
 int main(void) {
-    volatile unsigned int *rx_ready_ptr = (volatile unsigned int *)0x404;
+    // Try a different address - use 0x800 instead of 0x404
+    volatile unsigned int *rx_ready_ptr = (volatile unsigned int *)0x800;
     
     uart_putc('A');
     
@@ -12,42 +13,18 @@ int main(void) {
     
     uart_putc('B');
     
-    // Simple counter-based polling
-    int loops = 0;
-    while (1) {
-        unsigned int val = *rx_ready_ptr;
-        if (val != 0) {
-            uart_putc('!');
-            break;
-        }
-        loops++;
-        if (loops >= 100000) {
-            uart_putc('.');
-            loops = 0;
-        }
+    // Read back once
+    unsigned int v = *rx_ready_ptr;
+    uart_putc('0' + (v & 0xF));
+    uart_putc('\n');
+    
+    // Poll
+    while (*rx_ready_ptr == 0) {
+        // spin
     }
     
     uart_putc('X');
     uart_putc('\n');
-    
-    // Now read the data
-    volatile unsigned int *rx_len_ptr = (volatile unsigned int *)0x400;
-    volatile unsigned int *rx_buf_ptr = (volatile unsigned int *)0x300;
-    
-    unsigned int len = *rx_len_ptr;
-    uart_putc('L');
-    uart_putc('=');
-    uart_putc('0' + (len & 0xF));
-    uart_putc('\n');
-    
-    unsigned int word = *rx_buf_ptr;
-    char c = word & 0xFF;
-    uart_putc('[');
-    uart_putc(c);
-    uart_putc(']');
-    uart_putc('\n');
-    
-    *rx_ready_ptr = 0;
     
     while(1);
     return 0;
