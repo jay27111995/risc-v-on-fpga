@@ -136,7 +136,10 @@ module axi_core_hw(
       R_DONE: begin
         r_state_next = R_IDLE;
       end
-    end
+      default: begin
+        r_state_next = R_IDLE;
+      end
+    endcase
   end
 
   /*
