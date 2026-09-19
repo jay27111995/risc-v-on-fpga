@@ -4,9 +4,6 @@
 #include "uart.h"
 
 int main(void) {
-    // Explicitly clear RX_READY before starting (in case of garbage)
-    RX_READY = 0;
-    
     // Send characters one at a time
     uart_putc('H');
     uart_putc('e');
@@ -28,11 +25,8 @@ int main(void) {
     uart_putc('!');
     uart_putc('\n');
     
-    // Echo loop
-    while (1) {
-        char c = uart_getc();
-        uart_putc(c);
-    }
+    // Done - halt
+    while (1);
 
     return 0;
 }
