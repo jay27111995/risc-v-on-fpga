@@ -4,7 +4,6 @@
 #include "uart.h"
 
 int main(void) {
-    // Use direct address, not the macro
     volatile unsigned int *rx_ready_ptr = (volatile unsigned int *)0x404;
     
     uart_putc('A');
@@ -23,11 +22,17 @@ int main(void) {
     uart_putc('0' + (val & 0xF));
     uart_putc('\n');
     
-    uart_putc('C');
+    // Now the critical test - while loop
+    uart_putc('W');
     uart_putc('\n');
     
-    // Spin forever
-    while(1);
+    while (!(*rx_ready_ptr)) {
+        // Spin
+    }
     
+    uart_putc('X');
+    uart_putc('\n');
+    
+    while(1);
     return 0;
 }
