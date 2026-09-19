@@ -16,17 +16,25 @@ All 37 RV32I base instructions implemented and verified on hardware.
 ## Quick Start
 
 ```bash
-# 1. Program FPGA
-quartus_pgm -c 1 -m jtag -o "p;riscv-soc-*.sof"
+# 1. Program FPGA (see "Running on FPGA" section for full PCIe hot-reload steps)
+PCIE_EP=0000:b1:00.0  # Find with: lspci | grep -i 1172
+PCIE_RP=0000:b0:03.0  # Root port
+echo 1 | sudo tee /sys/bus/pci/devices/${PCIE_EP}/remove
+sudo setpci -s ${PCIE_RP} CAP_EXP+0x10.B=0x50
+configure_fpga riscv-soc-revid-0x2f-git-91a4c84-md5-a2936d3f2772083f6e6bcf3213e8759b.sof
+sudo setpci -s ${PCIE_RP} CAP_EXP+0x10.B=0x40
+echo 1 | sudo tee /sys/bus/pci/rescan
 
 # 2. Build host tools and a C program
 cd host && bash build.sh
 cd ../sw && ./build.sh sum.c
 
 # 3. Setup VFIO and run
-PCI=0000:b1:00.0
-GRP=$(basename $(readlink /sys/bus/pci/devices/$PCI/iommu_group))
-sudo ./host/test_programs $PCI $GRP
+GRP=$(basename $(readlink /sys/bus/pci/devices/${PCIE_EP}/iommu_group))
+echo ${PCIE_EP} | sudo tee /sys/bus/pci/devices/${PCIE_EP}/driver/unbind 2>/dev/null
+echo vfio-pci | sudo tee /sys/bus/pci/devices/${PCIE_EP}/driver_override
+echo ${PCIE_EP} | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+sudo ./host/bin/test_programs ${PCIE_EP} $GRP
 ```
 
 ## Architecture
@@ -188,19 +196,41 @@ cd build && quartus_sh --flow compile pcie_ed
 
 ### 1. Program FPGA
 
+Set up your PCIe endpoint and root port addresses:
 ```bash
-quartus_pgm -c 1 -m jtag -o "p;riscv-soc-*.sof"
+PCIE_EP=0000:b1:00.0  # Endpoint (FPGA) - find with: lspci | grep -i 1172
+PCIE_RP=0000:b0:03.0  # Root port (upstream bridge)
+```
+
+Program the FPGA (hot-reload safe):
+```bash
+# Remove endpoint from PCIe bus
+echo 1 | sudo tee /sys/bus/pci/devices/${PCIE_EP}/remove
+
+# Disable link (set link disable bit)
+sudo setpci -s ${PCIE_RP} CAP_EXP+0x10.B=0x50
+
+# Program FPGA via JTAG
+configure_fpga riscv-soc-revid-0x2f-git-91a4c84-md5-a2936d3f2772083f6e6bcf3213e8759b.sof
+
+# Re-enable link
+sudo setpci -s ${PCIE_RP} CAP_EXP+0x10.B=0x40
+
+# Rescan PCIe bus to re-enumerate the device
+echo 1 | sudo tee /sys/bus/pci/rescan
+
+# Verify device is back
+sudo lspci -s ${PCIE_EP} -vvv
 ```
 
 ### 2. Setup VFIO
 
 ```bash
-PCI=0000:b1:00.0  # Find with: lspci | grep -i 1172
-GRP=$(basename $(readlink /sys/bus/pci/devices/$PCI/iommu_group))
+GRP=$(basename $(readlink /sys/bus/pci/devices/${PCIE_EP}/iommu_group))
 
-echo $PCI | sudo tee /sys/bus/pci/devices/$PCI/driver/unbind 2>/dev/null
-echo vfio-pci | sudo tee /sys/bus/pci/devices/$PCI/driver_override
-echo $PCI | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
+echo ${PCIE_EP} | sudo tee /sys/bus/pci/devices/${PCIE_EP}/driver/unbind 2>/dev/null
+echo vfio-pci | sudo tee /sys/bus/pci/devices/${PCIE_EP}/driver_override
+echo ${PCIE_EP} | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 ```
 
 ### 3. Run Tests

@@ -90,11 +90,56 @@ module axi_core_hw(
   //   R_DONE:  One cycle delay before next transaction
 
   typedef enum logic [2:0] {R_IDLE, R_ADDR, R_WAIT, R_RESP, R_DONE} r_state_t;
-  r_state_t r_state;
+  r_state_t r_state, r_state_next;
 
   // Captured read address
   logic [19:0] r_addr_reg;
 
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      r_state <= R_IDLE;
+      r_addr_reg <= 20'h0;
+    end else begin
+      r_state <= r_state_next;
+
+      if (r_state == R_ADDR)
+        r_addr_reg <= axi_lite_s_araddr[19:0];
+    end
+  end
+
+  always_comb begin
+    r_state_next = r_state;
+    axi_lite_s_arready = 1'h0;
+    axi_lite_s_rvalid = 1'h0;
+    case (r_state)
+      R_IDLE: begin
+        if (axi_lite_s_arvalid)
+          r_state_next = R_ADDR;
+      end
+      R_ADDR: begin
+        // Capture address, move to wait
+        axi_lite_s_arready = 1'h1;
+        r_state_next = R_WAIT;
+      end
+      R_WAIT: begin
+        // Wait for adapter to complete
+        if (adapter_done)
+          r_state_next = R_RESP;
+      end
+      R_RESP: begin
+        // Hold rvalid until rready
+        if (axi_lite_s_rready) begin
+          axi_lite_s_rvalid = 1'h1;
+          r_state_next = R_DONE;
+        end
+      end
+      R_DONE: begin
+        r_state_next = R_IDLE;
+      end
+    end
+  end
+
+  /*
   always_ff @(posedge clk) begin
     if (rst) begin
       r_state <= R_IDLE;
@@ -130,6 +175,7 @@ module axi_core_hw(
   // Read channel outputs
   assign axi_lite_s_arready = (r_state == R_ADDR);
   assign axi_lite_s_rvalid  = (r_state == R_RESP);
+  */
 
   // =========================================================================
   // AXI-Lite Slave - Write Channel

@@ -66,7 +66,7 @@ int vfio_init(const char *pci_addr, int iommu_group) {
   struct vfio_group_status group_status = {.argsz = sizeof(group_status)};
   struct vfio_device_info device_info = {.argsz = sizeof(device_info)};
   struct vfio_region_info region_info = {.argsz = sizeof(region_info),
-                                         .index = VFIO_PCI_BAR0_REGION_INDEX};
+                                         .index = VFIO_PCI_BAR2_REGION_INDEX};
 
   // Open VFIO container
   container_fd = open("/dev/vfio/vfio", O_RDWR);
@@ -131,23 +131,23 @@ int vfio_init(const char *pci_addr, int iommu_group) {
     return -1;
   }
 
-  // Get BAR0 info
+  // Get BAR2 info
   if (ioctl(device_fd, VFIO_DEVICE_GET_REGION_INFO, &region_info) < 0) {
-    perror("Failed to get BAR0 info");
+    perror("Failed to get BAR2 info");
     return -1;
   }
 
-  // Map BAR0
+  // Map BAR2
   bar64 = mmap(NULL, region_info.size, PROT_READ | PROT_WRITE, MAP_SHARED,
                device_fd, region_info.offset);
   if (bar64 == MAP_FAILED) {
-    perror("Failed to mmap BAR0");
+    perror("Failed to mmap BAR2");
     bar64 = NULL;
     return -1;
   }
 
   bar_size = region_info.size;
-  printf("BAR0 mapped at %p, size %zu bytes\n", (void *)bar64, bar_size);
+  printf("BAR2 mapped at %p, size %zu bytes\n", (void *)bar64, bar_size);
   return 0;
 }
 
