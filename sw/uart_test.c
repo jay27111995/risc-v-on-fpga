@@ -4,7 +4,6 @@
 #include "uart.h"
 
 int main(void) {
-    // Use address near end of DMEM (32KB = 0x8000, so use 0x7FF0)
     volatile unsigned int *rx_ready_ptr = (volatile unsigned int *)0x7FF0;
     
     uart_putc('A');
@@ -13,22 +12,30 @@ int main(void) {
     
     uart_putc('B');
     
-    // Read back and print full hex
+    // Read back
     unsigned int v = *rx_ready_ptr;
-    uart_putc('=');
-    for (int i = 7; i >= 0; i--) {
-        int nibble = (v >> (i * 4)) & 0xF;
-        uart_putc(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
-    }
-    uart_putc('\n');
+    
+    uart_putc('[');
+    // Print just low byte as 2 hex digits
+    int hi = (v >> 4) & 0xF;
+    int lo = v & 0xF;
+    uart_putc(hi < 10 ? '0' + hi : 'A' + hi - 10);
+    uart_putc(lo < 10 ? '0' + lo : 'A' + lo - 10);
+    uart_putc(']');
+    
+    uart_putc('W');  // About to enter wait
     
     // Poll
+    int count = 0;
     while (*rx_ready_ptr == 0) {
-        // spin
+        count++;
+        if (count > 1000000) {
+            uart_putc('.');
+            count = 0;
+        }
     }
     
     uart_putc('X');
-    uart_putc('\n');
     
     while(1);
     return 0;
