@@ -109,15 +109,19 @@ int main(int argc, char *argv[]) {
         // Every 1000 loops, print debug state
         if (loop_count % 1000 == 0) {
             uint32_t marker = read32(DEBUG_OFF);
-            uint32_t rx_ready_cpu = read32(DEBUG_OFF + 4);
-            uint32_t rx_len_cpu = read32(DEBUG_OFF + 8);
-            uint32_t rx_buf0_cpu = read32(DEBUG_OFF + 12);
-            uint32_t got_char = read32(DEBUG_OFF + 16);
+            uint32_t rx_ready_before = read32(DEBUG_OFF + 4);
+            uint32_t rx_len_before = read32(DEBUG_OFF + 8);
+            uint32_t block_state = read32(DEBUG_OFF + 12);
+            uint32_t rx_ready_after = read32(DEBUG_OFF + 16);
+            uint32_t rx_len_after = read32(DEBUG_OFF + 20);
+            uint32_t rx_byte = read32(DEBUG_OFF + 24);
             
             uint32_t rx_ready_host = read32(RX_READY_OFF);
             
-            printf("\n[DEBUG loop=%d] marker=0x%X rx_ready_cpu=%u rx_ready_host=%u rx_len=%u rx_buf0=0x%X got_char=0x%X\n",
-                   loop_count, marker, rx_ready_cpu, rx_ready_host, rx_len_cpu, rx_buf0_cpu, got_char);
+            printf("\n[DEBUG loop=%d] marker=0x%X block=0x%X\n", loop_count, marker, block_state);
+            printf("  Before wait: rx_ready=%u rx_len=%u\n", rx_ready_before, rx_len_before);
+            printf("  After wait:  rx_ready=%u rx_len=%u rx_byte=0x%X\n", rx_ready_after, rx_len_after, rx_byte);
+            printf("  Host sees:   rx_ready=%u\n", rx_ready_host);
             fflush(stdout);
         }
         

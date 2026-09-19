@@ -10,29 +10,30 @@ int main(void) {
     
     // Send "Hi" first as simple test
     uart_putc('H');
-    debug[0] = 0xAAAA0002;  // Marker: after H
-    
     uart_putc('i');
-    debug[0] = 0xAAAA0003;  // Marker: after i
-    
     uart_putc('\n');
-    debug[0] = 0xAAAA0004;  // Marker: after newline
+    debug[0] = 0xAAAA0002;  // Marker: after Hi
     
-    // Now check RX_READY value
+    // Record what we see BEFORE waiting
     debug[1] = RX_READY;    // What does CPU see for RX_READY?
     debug[2] = RX_LEN;      // What does CPU see for RX_LEN?
-    debug[3] = RX_BUFFER[0]; // First byte of RX buffer
+    debug[3] = 0xBBBB;      // Marker: about to block
     
-    debug[0] = 0xAAAA0005;  // Marker: checked RX state
+    // Block waiting for input
+    while (!RX_READY) {
+        // Spin - do nothing
+    }
     
-    // Try to read one char (will block if RX_READY is 0)
-    debug[0] = 0xAAAA0006;  // Marker: about to call uart_getc
-    char c = uart_getc();
-    debug[4] = c;           // What did we get?
-    debug[0] = 0xAAAA0007;  // Marker: after uart_getc
+    debug[3] = 0xCCCC;      // Marker: unblocked!
+    debug[4] = RX_READY;    // What's RX_READY now?
+    debug[5] = RX_LEN;      // What's RX_LEN now?
+    debug[6] = RX_BUFFER[0]; // First byte
     
-    // Echo it back
-    uart_putc(c);
+    // Echo it
+    uart_putc(RX_BUFFER[0]);
+    uart_putc('\n');
+    RX_READY = 0;
+    
     debug[0] = 0xAAAA0008;  // Marker: done
     
     while (1);

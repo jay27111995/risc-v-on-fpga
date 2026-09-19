@@ -63,7 +63,8 @@ static inline int uart_rx_available(void) {
 
 // Blocking read - wait for host to send data
 static inline int uart_read(char *buf, int max_len) {
-    while (!RX_READY);  // Wait for host
+    // Wait for host to signal data ready AND have non-zero length
+    while (!RX_READY || RX_LEN == 0);
     
     int len = RX_LEN;
     if (len > max_len) len = max_len;
