@@ -67,5 +67,6 @@ cat << 'EOF'
    ./bin/test_sniffer $PCI $GRP    # Bus sniffer test
    ./bin/test_logger $PCI $GRP     # CPU logger with IMEM trace
    ./bin/test_programs $PCI $GRP   # Run sum.c/factorial.c
+   ./bin/uart_console $PCI $GRP    # Virtual UART terminal
 
 EOF
