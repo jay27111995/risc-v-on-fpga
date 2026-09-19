@@ -142,14 +142,13 @@ int main(int argc, char *argv[]) {
                             usleep(100);
                         }
 
-                        // Write to RX buffer
-                        for (int i = 0; i < input_len; i++) {
-                            uint32_t addr = RX_BUFFER_OFF + (i & ~3);
-                            uint32_t shift = 8 * (i & 3);
-                            uint32_t val = read32(addr);
-                            val &= ~(0xFF << shift);
-                            val |= ((uint32_t)input_buf[i] & 0xFF) << shift;
-                            write32(addr, val);
+                        // Write to RX buffer - pack bytes into words
+                        for (int i = 0; i < input_len; i += 4) {
+                            uint32_t word = 0;
+                            for (int j = 0; j < 4 && (i + j) < input_len; j++) {
+                                word |= ((uint32_t)(unsigned char)input_buf[i + j]) << (j * 8);
+                            }
+                            write32(RX_BUFFER_OFF + i, word);
                         }
                         write32(RX_LEN_OFF, input_len);
                         write32(RX_READY_OFF, 1);  // Signal CPU
