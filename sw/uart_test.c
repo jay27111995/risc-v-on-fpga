@@ -4,8 +4,8 @@
 #include "uart.h"
 
 int main(void) {
-    // Try a different address - use 0x800 instead of 0x404
-    volatile unsigned int *rx_ready_ptr = (volatile unsigned int *)0x800;
+    // Use address near end of DMEM (32KB = 0x8000, so use 0x7FF0)
+    volatile unsigned int *rx_ready_ptr = (volatile unsigned int *)0x7FF0;
     
     uart_putc('A');
     
