@@ -97,9 +97,30 @@ int main(int argc, char *argv[]) {
 
     // Main polling loop
     char input_buf[UART_BUF_SIZE];
+    // Debug: define debug area offset
+    #define DEBUG_OFF (DMEM_BASE + 0x500)
+    
     int input_len = 0;
+    int loop_count = 0;
 
     while (1) {
+        loop_count++;
+        
+        // Every 1000 loops, print debug state
+        if (loop_count % 1000 == 0) {
+            uint32_t marker = read32(DEBUG_OFF);
+            uint32_t rx_ready_cpu = read32(DEBUG_OFF + 4);
+            uint32_t rx_len_cpu = read32(DEBUG_OFF + 8);
+            uint32_t rx_buf0_cpu = read32(DEBUG_OFF + 12);
+            uint32_t got_char = read32(DEBUG_OFF + 16);
+            
+            uint32_t rx_ready_host = read32(RX_READY_OFF);
+            
+            printf("\n[DEBUG loop=%d] marker=0x%X rx_ready_cpu=%u rx_ready_host=%u rx_len=%u rx_buf0=0x%X got_char=0x%X\n",
+                   loop_count, marker, rx_ready_cpu, rx_ready_host, rx_len_cpu, rx_buf0_cpu, got_char);
+            fflush(stdout);
+        }
+        
         // Check for CPU output (TX_READY == 1)
         if (read32(TX_READY_OFF) == 1) {
             int len = read32(TX_LEN_OFF);
