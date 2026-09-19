@@ -26,7 +26,7 @@
 
 #define RX_BUFFER_OFF   (DMEM_BASE + 0x300)
 #define RX_LEN_OFF      (DMEM_BASE + 0x400)
-#define RX_READY_OFF    (DMEM_BASE + 0x404)
+#define RX_READY_OFF    (DMEM_BASE + 0x7FF0)  // Moved to end of DMEM for testing
 
 #define UART_BUF_SIZE   256
 
