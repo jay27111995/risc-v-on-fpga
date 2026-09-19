@@ -79,12 +79,13 @@ int main(int argc, char *argv[]) {
     write32(RX_READY_OFF, 0);
     write32(TX_LEN_OFF, 0);
     write32(RX_LEN_OFF, 0);
-    // Clear RX buffer area to prevent garbage reads
+    // Clear both buffer areas
     for (int i = 0; i < 256; i += 4) {
+        write32(TX_BUFFER_OFF + i, 0);
         write32(RX_BUFFER_OFF + i, 0);
     }
 
-    // Just run the CPU (don't reset - loader already set up everything)
+    // Start the CPU
     cpu_run();
 
     // Enable raw terminal mode for character-by-character input
