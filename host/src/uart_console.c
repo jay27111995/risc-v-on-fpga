@@ -80,6 +80,9 @@ int main(int argc, char *argv[]) {
     write32(TX_LEN_OFF, 0);
     write32(RX_LEN_OFF, 0);
 
+    // Start the CPU (loader may have stopped it)
+    cpu_run();
+
     // Enable raw terminal mode for character-by-character input
     enable_raw_mode();
 
