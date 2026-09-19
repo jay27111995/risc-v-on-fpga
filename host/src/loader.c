@@ -1,9 +1,9 @@
-// RISC-V Binary Loader and Runner
+// RISC-V Binary Loader
 // ============================================================================
-// Loads a .bin file to IMEM and runs it on the FPGA.
+// Loads a .bin file to IMEM. Does NOT run the CPU - use uart_console for that.
 //
-// Usage: ./loader <binary.bin> [pci_addr] [iommu_group] [run_time_ms]
-// Example: ./loader ../sw/sum.bin 0000:b1:00.0 12
+// Usage: ./loader <binary.bin> [pci_addr] [iommu_group]
+// Example: ./loader ../sw/uart_test.bin 0000:b1:00.0 12
 // ============================================================================
 
 #include "riscv_lib.h"
@@ -14,7 +14,7 @@
 #include <unistd.h>
 
 // ----------------------------------------------------------------------------
-// Binary Loader (local - uses 64-bit writes for efficiency)
+// Binary Loader
 // ----------------------------------------------------------------------------
 
 static void write_imem_pair(uint32_t pair_idx, uint32_t even, uint32_t odd) {
@@ -83,7 +83,6 @@ int main(int argc, char *argv[]) {
     const char *pci_addr = "0000:31:00.0";
     int iommu_group = 52;
     const char *binary = NULL;
-    int run_time_ms = 10;
 
     // Parse arguments
     for (int i = 1; i < argc; i++) {
@@ -95,33 +94,27 @@ int main(int argc, char *argv[]) {
             if (strchr(argv[i], '.')) {
                 pci_addr = argv[i];
             } else {
-                int val = atoi(argv[i]);
-                if (val < 100) {
-                    iommu_group = val;
-                } else {
-                    run_time_ms = val;
-                }
+                iommu_group = atoi(argv[i]);
             }
         }
     }
 
     if (!binary) {
-        printf("Usage: %s <binary.bin> [pci_addr] [iommu_group] [run_time_ms]\n", argv[0]);
-        printf("Example: %s ../sw/sum.bin 0000:b1:00.0 12\n", argv[0]);
+        printf("Usage: %s <binary.bin> [pci_addr] [iommu_group]\n", argv[0]);
+        printf("Example: %s ../sw/uart_test.bin 0000:b1:00.0 12\n", argv[0]);
         return 1;
     }
 
     printf("RISC-V Binary Loader\n");
     printf("====================\n");
     printf("PCI: %s, IOMMU group: %d\n", pci_addr, iommu_group);
-    printf("Binary: %s\n", binary);
-    printf("Run time: %d ms\n\n", run_time_ms);
+    printf("Binary: %s\n\n", binary);
 
     if (vfio_init(pci_addr, iommu_group) < 0) {
         return 1;
     }
 
-    // Reset and stop CPU
+    // Stop and reset CPU
     cpu_stop();
     cpu_reset();
 
@@ -130,44 +123,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Run CPU
-    printf("\nRunning CPU for %d ms...\n", run_time_ms);
-    cpu_run();
-    usleep(run_time_ms * 1000);
-    cpu_stop();
-
-    // Read results
-    uint32_t pc = read32(BAR_PC);
-    uint32_t cycles = read32(BAR_CYCLES);
-    uint32_t instrs = read32(BAR_INSTRS);
-
-    printf("\n=== Results ===\n");
-    printf("PC:     0x%08X\n", pc);
-    printf("Cycles: %u\n", cycles);
-    printf("Instrs: %u\n", instrs);
-
-    printf("\n=== DMEM Contents ===\n");
-    for (int i = 0; i < 16; i++) {
-        uint32_t val = read_dmem(i);
-        if (val != 0) {
-            printf("  DMEM[%2d] = %10u (0x%08X)\n", i, val, val);
-        }
-    }
-
-    // Check for completion marker
-    uint32_t dmem0 = read_dmem(0);
-    uint32_t dmem1 = read_dmem(1);
-    uint32_t dmem2 = read_dmem(2);
-
-    printf("\n=== Verification ===\n");
-    if (dmem0 == 55 && dmem1 == 10 && dmem2 == 0xDEAD) {
-        printf("sum.bin: PASSED (sum(1..10) = %u)\n", dmem0);
-    } else if (dmem2 == 0xDEAD) {
-        printf("Program completed (marker found)\n");
-        printf("  DMEM[0] = %u\n", dmem0);
-    } else {
-        printf("Program may not have completed (no marker at DMEM[2])\n");
-    }
+    printf("\nProgram loaded. Run uart_console to start CPU.\n");
 
     vfio_cleanup();
     return 0;

@@ -84,8 +84,7 @@ int main(int argc, char *argv[]) {
         write32(RX_BUFFER_OFF + i, 0);
     }
 
-    // Reset and start CPU
-    cpu_reset();
+    // Just run the CPU (don't reset - loader already set up everything)
     cpu_run();
 
     // Enable raw terminal mode for character-by-character input
