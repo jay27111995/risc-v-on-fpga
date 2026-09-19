@@ -83,6 +83,13 @@ int main(int argc, char *argv[]) {
     // Reset and restart CPU from beginning
     cpu_reset();
     cpu_run();
+    
+    printf("CPU reset and started. Waiting for output...\n");
+    
+    // Debug: check CPU status
+    uint32_t status = read32(0x08);  // BAR_STATUS
+    uint32_t pc = read32(0x10);      // BAR_PC
+    printf("DEBUG: STATUS=0x%X, PC=0x%X\n", status, pc);
 
     // Enable raw terminal mode for character-by-character input
     enable_raw_mode();
