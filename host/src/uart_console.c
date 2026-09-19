@@ -142,16 +142,24 @@ int main(int argc, char *argv[]) {
                             usleep(100);
                         }
 
+                        printf("\n[DEBUG] Sending %d bytes\n", input_len);
+                        
                         // Write to RX buffer - pack bytes into words
                         for (int i = 0; i < input_len; i += 4) {
                             uint32_t word = 0;
                             for (int j = 0; j < 4 && (i + j) < input_len; j++) {
                                 word |= ((uint32_t)(unsigned char)input_buf[i + j]) << (j * 8);
                             }
+                            printf("[DEBUG] Write word 0x%08X to offset 0x%X\n", word, RX_BUFFER_OFF + i);
                             write32(RX_BUFFER_OFF + i, word);
                         }
+                        printf("[DEBUG] Write len %d to offset 0x%X\n", input_len, RX_LEN_OFF);
                         write32(RX_LEN_OFF, input_len);
+                        printf("[DEBUG] Write ready=1 to offset 0x%X\n", RX_READY_OFF);
                         write32(RX_READY_OFF, 1);  // Signal CPU
+                        
+                        // Verify readback
+                        printf("[DEBUG] Readback: len=%u ready=%u\n", read32(RX_LEN_OFF), read32(RX_READY_OFF));
 
                         input_len = 0;
                     }
