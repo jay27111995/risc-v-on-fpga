@@ -74,11 +74,15 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Clear mailbox registers
+    // Clear mailbox registers and buffers
     write32(TX_READY_OFF, 0);
     write32(RX_READY_OFF, 0);
     write32(TX_LEN_OFF, 0);
     write32(RX_LEN_OFF, 0);
+    // Clear RX buffer area to prevent garbage reads
+    for (int i = 0; i < 256; i += 4) {
+        write32(RX_BUFFER_OFF + i, 0);
+    }
 
     // Reset and start CPU
     cpu_reset();
