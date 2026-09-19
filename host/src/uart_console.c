@@ -74,22 +74,28 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Clear mailbox registers
+    // Reset CPU first
+    cpu_reset();
+    
+    // Clear mailbox registers AFTER reset
     write32(TX_READY_OFF, 0);
     write32(RX_READY_OFF, 0);
     write32(TX_LEN_OFF, 0);
     write32(RX_LEN_OFF, 0);
+    
+    // Debug: check CPU status before run
+    uint32_t pc_before = read32(0x10);
+    printf("DEBUG: PC after reset = 0x%X\n", pc_before);
 
-    // Reset and restart CPU from beginning
-    cpu_reset();
+    // Start CPU
     cpu_run();
+    usleep(10000);  // Let it run a bit
     
-    printf("CPU reset and started. Waiting for output...\n");
-    
-    // Debug: check CPU status
-    uint32_t status = read32(0x08);  // BAR_STATUS
-    uint32_t pc = read32(0x10);      // BAR_PC
-    printf("DEBUG: STATUS=0x%X, PC=0x%X\n", status, pc);
+    // Debug: check CPU status after run
+    uint32_t status = read32(0x08);
+    uint32_t pc = read32(0x10);
+    uint32_t tx_ready = read32(TX_READY_OFF);
+    printf("DEBUG: STATUS=0x%X, PC=0x%X, TX_READY=%u\n", status, pc, tx_ready);
 
     // Enable raw terminal mode for character-by-character input
     enable_raw_mode();
