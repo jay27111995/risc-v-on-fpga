@@ -12,30 +12,42 @@ int main(void) {
     
     uart_putc('B');
     
-    // Read back
-    unsigned int v = *rx_ready_ptr;
-    
+    // Read back 10 times and print each
     uart_putc('[');
-    // Print just low byte as 2 hex digits
-    int hi = (v >> 4) & 0xF;
-    int lo = v & 0xF;
-    uart_putc(hi < 10 ? '0' + hi : 'A' + hi - 10);
-    uart_putc(lo < 10 ? '0' + lo : 'A' + lo - 10);
+    for (int i = 0; i < 10; i++) {
+        unsigned int v = *rx_ready_ptr;
+        uart_putc(v == 0 ? '0' : '1');
+    }
     uart_putc(']');
+    uart_putc('\n');
     
-    uart_putc('W');  // About to enter wait
-    
-    // Poll
-    int count = 0;
-    while (*rx_ready_ptr == 0) {
-        count++;
-        if (count > 1000000) {
-            uart_putc('.');
-            count = 0;
-        }
+    // Now spin and count consecutive zeros vs non-zeros
+    int zeros = 0;
+    int ones = 0;
+    for (int i = 0; i < 100000; i++) {
+        if (*rx_ready_ptr == 0) zeros++;
+        else ones++;
     }
     
-    uart_putc('X');
+    // Print stats
+    uart_putc('Z');
+    uart_putc('=');
+    // Print zeros as decimal (rough)
+    if (zeros >= 10000) uart_putc('0' + (zeros / 10000) % 10);
+    if (zeros >= 1000) uart_putc('0' + (zeros / 1000) % 10);
+    if (zeros >= 100) uart_putc('0' + (zeros / 100) % 10);
+    if (zeros >= 10) uart_putc('0' + (zeros / 10) % 10);
+    uart_putc('0' + zeros % 10);
+    uart_putc('\n');
+    
+    uart_putc('O');
+    uart_putc('=');
+    if (ones >= 10000) uart_putc('0' + (ones / 10000) % 10);
+    if (ones >= 1000) uart_putc('0' + (ones / 1000) % 10);
+    if (ones >= 100) uart_putc('0' + (ones / 100) % 10);
+    if (ones >= 10) uart_putc('0' + (ones / 10) % 10);
+    uart_putc('0' + ones % 10);
+    uart_putc('\n');
     
     while(1);
     return 0;
