@@ -76,7 +76,6 @@ int main(int argc, char *argv[]) {
 
     // Clear mailbox registers and buffers
     write32(TX_READY_OFF, 0);
-    write32(RX_READY_OFF, 0);
     write32(TX_LEN_OFF, 0);
     write32(RX_LEN_OFF, 0);
     // Clear both buffer areas
@@ -84,6 +83,12 @@ int main(int argc, char *argv[]) {
         write32(TX_BUFFER_OFF + i, 0);
         write32(RX_BUFFER_OFF + i, 0);
     }
+    // Clear RX_READY LAST (after everything else is zero)
+    write32(RX_READY_OFF, 0);
+    usleep(10000);  // 10ms delay to ensure writes complete
+    
+    // Verify RX_READY is 0
+    printf("DEBUG: RX_READY before CPU start = %u\n", read32(RX_READY_OFF));
 
     // Start the CPU
     cpu_run();
