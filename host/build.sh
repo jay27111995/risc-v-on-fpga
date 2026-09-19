@@ -33,6 +33,9 @@ gcc $CFLAGS $LIBS $OUT/test_logger.o -o $OUT/test_logger
 gcc $CFLAGS -c $SRC/test_programs.c -o $OUT/test_programs.o
 gcc $CFLAGS $LIBS $OUT/test_programs.o -o $OUT/test_programs
 
+gcc $CFLAGS -c $SRC/uart_console.c -o $OUT/uart_console.o
+gcc $CFLAGS $LIBS $OUT/uart_console.o -o $OUT/uart_console
+
 # Clean up object files
 rm -f $OUT/*.o
 
@@ -43,6 +46,7 @@ echo "  loader        - Load binary to IMEM and run"
 echo "  test_sniffer  - Bus sniffer test"
 echo "  test_logger   - CPU logger test with IMEM tracing"
 echo "  test_programs - Run sum.c and factorial.c"
+echo "  uart_console  - Virtual UART terminal"
 echo ""
 
 # Usage instructions
