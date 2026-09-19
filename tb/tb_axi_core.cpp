@@ -1798,6 +1798,253 @@ int main(int argc, char** argv) {
         else { printf("  DIV by zero test PASSED!\n"); }
     }
 
+    // Test 41: Polling loop (write 0, read in loop, host sets to 1)
+    // This tests the exact scenario failing on hardware
+    {
+        printf("\n=== Test 41: Polling loop (UART RX simulation) ===\n");
+        tb.axi_write(0x00, 0x02);  // Reset
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // CPU program:
+        //   x1 = address of flag (0x600)
+        //   store 0 to [x1]
+        //   loop: load [x1], if 0 branch back
+        //   store 1 to 0x700 (signal done)
+        //   ebreak
+        tb.axi_write(0x20000 + 0,  0x60000093);  // ADDI x1, x0, 0x600   ; x1 = 0x600 (flag addr)
+        tb.axi_write(0x20000 + 4,  0x00002023);  // SW   x0, 0(x0)       ; clear dmem[0] for result
+        tb.axi_write(0x20000 + 8,  0x0000A103);  // LW   x2, 0(x1)       ; loop: x2 = [0x600]
+        tb.axi_write(0x20000 + 12, 0xFE010EE3);  // BEQ  x2, x0, -4      ; if x2==0, loop back
+        tb.axi_write(0x20000 + 16, 0x00100193);  // ADDI x3, x0, 1       ; x3 = 1
+        tb.axi_write(0x20000 + 20, 0x00302023);  // SW   x3, 0(x0)       ; dmem[0] = 1 (done flag)
+        tb.axi_write(0x20000 + 24, 0x00100073);  // EBREAK
+
+        // Clear flag location and result
+        tb.axi_write(0x80000, 0);         // result at 0x80000
+        tb.axi_write(0x80000 + 0x600, 0); // flag at 0x80600
+
+        // Start CPU
+        tb.axi_write(0x00, 0x01);
+
+        // Let it poll for a while
+        printf("  CPU polling (flag=0)...\n");
+        for (int i = 0; i < 200; i++) tb.tick();
+
+        // Verify CPU is still running (polling)
+        uint32_t status = (uint32_t)tb.axi_read(0x08);
+        printf("  STATUS after 200 cycles: 0x%X (expect running=1)\n", status);
+        if ((status & 1) == 0) {
+            printf("  ERROR: CPU should still be running!\n");
+            errors++;
+        }
+
+        // Check result - should still be 0
+        uint32_t result1 = (uint32_t)tb.axi_read(0x80000);
+        printf("  dmem[0] = %u (should be 0, CPU still polling)\n", result1);
+        if (result1 != 0) {
+            printf("  ERROR: CPU exited loop prematurely!\n");
+            errors++;
+        }
+
+        // Now host sets the flag to 1
+        printf("  Host setting flag=1...\n");
+        tb.axi_write(0x80000 + 0x600, 1);
+
+        // Let CPU detect and exit
+        for (int i = 0; i < 100; i++) tb.tick();
+
+        // Check result - should now be 1
+        uint32_t result2 = (uint32_t)tb.axi_read(0x80000);
+        printf("  dmem[0] = %u (should be 1, CPU detected flag)\n", result2);
+        if (result2 != 1) {
+            printf("  ERROR: CPU didn't detect flag!\n");
+            errors++;
+        }
+
+        // CPU should be halted now
+        status = (uint32_t)tb.axi_read(0x08);
+        printf("  STATUS: 0x%X (expect halted)\n", status);
+        if ((status & 2) == 0) {
+            printf("  WARNING: CPU may not have halted\n");
+        }
+
+        if (result1 == 0 && result2 == 1) {
+            printf("  Polling loop test PASSED!\n");
+        }
+    }
+
+    // Test 42: Concurrent host writes during CPU polling
+    // Stress test - host writes to different addresses while CPU polls
+    {
+        printf("\n=== Test 42: Concurrent host writes during CPU poll ===\n");
+        tb.axi_write(0x00, 0x02);  // Reset
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // Same polling program as test 41
+        tb.axi_write(0x20000 + 0,  0x60000093);  // ADDI x1, x0, 0x600
+        tb.axi_write(0x20000 + 4,  0x00002023);  // SW   x0, 0(x0)
+        tb.axi_write(0x20000 + 8,  0x0000A103);  // LW   x2, 0(x1)
+        tb.axi_write(0x20000 + 12, 0xFE010EE3);  // BEQ  x2, x0, -4
+        tb.axi_write(0x20000 + 16, 0x00100193);  // ADDI x3, x0, 1
+        tb.axi_write(0x20000 + 20, 0x00302023);  // SW   x3, 0(x0)
+        tb.axi_write(0x20000 + 24, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);
+        tb.axi_write(0x80000 + 0x600, 0);
+
+        // Start CPU
+        tb.axi_write(0x00, 0x01);
+
+        // Interleave host writes to other addresses while CPU polls
+        for (int i = 0; i < 50; i++) {
+            tb.tick();
+            // Write to various addresses (not the flag)
+            tb.axi_write(0x80000 + 0x100 + (i * 4), 0xDEADBEEF);
+            tb.tick();
+            tb.tick();
+        }
+
+        // Verify CPU still polling
+        uint32_t result1 = (uint32_t)tb.axi_read(0x80000);
+        printf("  After concurrent writes, dmem[0] = %u (should be 0)\n", result1);
+
+        // Set flag
+        tb.axi_write(0x80000 + 0x600, 1);
+        for (int i = 0; i < 50; i++) tb.tick();
+
+        uint32_t result2 = (uint32_t)tb.axi_read(0x80000);
+        printf("  After flag set, dmem[0] = %u (should be 1)\n", result2);
+
+        if (result1 == 0 && result2 == 1) {
+            printf("  Concurrent write test PASSED!\n");
+        } else {
+            printf("  ERROR: Concurrent write test FAILED!\n");
+            errors++;
+        }
+    }
+
+    // Test 43: CPU polls for flag to become 0 (inverse scenario)
+    // This matches the UART RX ready pattern - host clears flag, CPU waits
+    {
+        printf("\n=== Test 43: CPU waits for flag=0 (host clears) ===\n");
+        tb.axi_write(0x00, 0x02);  // Reset
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // CPU program:
+        //   Write 1 to flag initially
+        //   Wait for flag to become 0
+        //   Write 99 to result when done
+        tb.axi_write(0x20000 + 0,  0x60000093);  // ADDI x1, x0, 0x600   ; x1 = flag addr
+        tb.axi_write(0x20000 + 4,  0x00100193);  // ADDI x3, x0, 1       ; x3 = 1
+        tb.axi_write(0x20000 + 8,  0x0030A023);  // SW   x3, 0(x1)       ; [flag] = 1
+        tb.axi_write(0x20000 + 12, 0x0000A103);  // LW   x2, 0(x1)       ; loop: x2 = [flag]
+        tb.axi_write(0x20000 + 16, 0xFE011EE3);  // BNE  x2, x0, -4      ; if x2!=0, loop
+        tb.axi_write(0x20000 + 20, 0x06300193);  // ADDI x3, x0, 99      ; x3 = 99
+        tb.axi_write(0x20000 + 24, 0x00302023);  // SW   x3, 0(x0)       ; dmem[0] = 99
+        tb.axi_write(0x20000 + 28, 0x00100073);  // EBREAK
+
+        tb.axi_write(0x80000, 0);  // Clear result
+
+        // Start CPU
+        tb.axi_write(0x00, 0x01);
+
+        // Let CPU run, it should set flag=1 and start polling
+        for (int i = 0; i < 100; i++) tb.tick();
+
+        // Verify flag is 1 (CPU set it)
+        uint32_t flag = (uint32_t)tb.axi_read(0x80000 + 0x600);
+        printf("  Flag after CPU init: %u (should be 1)\n", flag);
+
+        // Verify CPU is still polling
+        uint32_t result1 = (uint32_t)tb.axi_read(0x80000);
+        printf("  Result while polling: %u (should be 0)\n", result1);
+
+        // Now host clears the flag
+        printf("  Host clearing flag...\n");
+        tb.axi_write(0x80000 + 0x600, 0);
+
+        // Let CPU detect
+        for (int i = 0; i < 100; i++) tb.tick();
+
+        uint32_t result2 = (uint32_t)tb.axi_read(0x80000);
+        printf("  Result after flag clear: %u (should be 99)\n", result2);
+
+        if (flag == 1 && result1 == 0 && result2 == 99) {
+            printf("  Wait-for-zero test PASSED!\n");
+        } else {
+            printf("  ERROR: Wait-for-zero test FAILED!\n");
+            errors++;
+        }
+    }
+
+    // Test 44: Exact UART RX pattern - CPU writes 0, waits for non-zero
+    // This exactly matches uart_test.c behavior
+    {
+        printf("\n=== Test 44: Exact UART RX pattern ===\n");
+        tb.axi_write(0x00, 0x02);  // Reset
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // CPU program matching uart_test.c:
+        //   x1 = 0x7FF0 (rx_ready address)
+        //   store 0 to [x1]  (clear flag)
+        //   loop: load [x1], if ==0 branch back
+        //   store 1 to dmem[0]
+        //   ebreak
+        uint32_t flag_addr = 0x7FF0;  // Same as uart_test.c
+        tb.axi_write(0x20000 + 0,  0x7FF00093 | ((flag_addr & 0xFFF) << 20));  // ADDI x1, x0, 0x7FF0
+        // Actually ADDI can only do 12-bit signed immediate, need LUI+ADDI
+        // 0x7FF0 = 0x8000 - 0x10 = LUI 8, ADDI -16
+        tb.axi_write(0x20000 + 0,  0x000080B7);  // LUI  x1, 8          ; x1 = 0x8000
+        tb.axi_write(0x20000 + 4,  0xFF008093);  // ADDI x1, x1, -16    ; x1 = 0x7FF0
+        tb.axi_write(0x20000 + 8,  0x0000A023);  // SW   x0, 0(x1)      ; [0x7FF0] = 0
+        tb.axi_write(0x20000 + 12, 0x0000A103);  // LW   x2, 0(x1)      ; loop: x2 = [0x7FF0]
+        tb.axi_write(0x20000 + 16, 0xFE010EE3);  // BEQ  x2, x0, -4     ; if x2==0, loop
+        tb.axi_write(0x20000 + 20, 0x00100193);  // ADDI x3, x0, 1
+        tb.axi_write(0x20000 + 24, 0x00302023);  // SW   x3, 0(x0)      ; dmem[0] = 1
+        tb.axi_write(0x20000 + 28, 0x00100073);  // EBREAK
+
+        // Clear both locations
+        tb.axi_write(0x80000, 0);                   // result
+        tb.axi_write(0x80000 + flag_addr, 0x1234); // flag (set to non-zero initially)
+
+        // Start CPU
+        tb.axi_write(0x00, 0x01);
+
+        // CPU should write 0 to flag, then start polling
+        for (int i = 0; i < 100; i++) tb.tick();
+
+        // Verify flag is 0 (CPU cleared it)
+        uint32_t flag = (uint32_t)tb.axi_read(0x80000 + flag_addr);
+        printf("  Flag after CPU clears: 0x%X (should be 0)\n", flag);
+
+        // Verify result still 0 (CPU is polling)
+        uint32_t result1 = (uint32_t)tb.axi_read(0x80000);
+        printf("  Result while polling: %u (should be 0)\n", result1);
+
+        // Let it poll more
+        for (int i = 0; i < 500; i++) tb.tick();
+
+        // Still should be 0
+        uint32_t result2 = (uint32_t)tb.axi_read(0x80000);
+        printf("  Result after 500 more cycles: %u (should still be 0)\n", result2);
+
+        // Now host sets flag to 1
+        printf("  Host setting flag=1...\n");
+        tb.axi_write(0x80000 + flag_addr, 1);
+
+        for (int i = 0; i < 100; i++) tb.tick();
+
+        uint32_t result3 = (uint32_t)tb.axi_read(0x80000);
+        printf("  Result after flag set: %u (should be 1)\n", result3);
+
+        if (flag == 0 && result1 == 0 && result2 == 0 && result3 == 1) {
+            printf("  Exact UART RX pattern test PASSED!\n");
+        } else {
+            printf("  ERROR: Exact UART RX pattern test FAILED!\n");
+            errors++;
+        }
+    }
+
     printf("\n");
     if (errors == 0) {
         printf("=== ALL TESTS PASSED ===\n");
