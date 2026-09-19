@@ -12,25 +12,42 @@ int main(void) {
     
     uart_putc('B');
     
-    // Read in loop and print each time
-    for (int i = 0; i < 5; i++) {
+    // Simple counter-based polling
+    int loops = 0;
+    while (1) {
         unsigned int val = *rx_ready_ptr;
-        uart_putc('0' + (val & 0xF));
+        if (val != 0) {
+            uart_putc('!');
+            break;
+        }
+        loops++;
+        if (loops >= 100000) {
+            uart_putc('.');
+            loops = 0;
+        }
     }
-    uart_putc('\n');
-    
-    uart_putc('W');
-    
-    // Manual polling loop
-    unsigned int ready;
-    do {
-        ready = *rx_ready_ptr;
-    } while (ready == 0);
     
     uart_putc('X');
-    uart_putc('=');
-    uart_putc('0' + (ready & 0xF));
     uart_putc('\n');
+    
+    // Now read the data
+    volatile unsigned int *rx_len_ptr = (volatile unsigned int *)0x400;
+    volatile unsigned int *rx_buf_ptr = (volatile unsigned int *)0x300;
+    
+    unsigned int len = *rx_len_ptr;
+    uart_putc('L');
+    uart_putc('=');
+    uart_putc('0' + (len & 0xF));
+    uart_putc('\n');
+    
+    unsigned int word = *rx_buf_ptr;
+    char c = word & 0xFF;
+    uart_putc('[');
+    uart_putc(c);
+    uart_putc(']');
+    uart_putc('\n');
+    
+    *rx_ready_ptr = 0;
     
     while(1);
     return 0;
