@@ -1,9 +1,12 @@
-// RISC-V Binary Loader
+// RISC-V Binary Loader and Runner
 // ============================================================================
-// Loads a .bin file to IMEM. Does NOT run the CPU - use uart_console for that.
+// Loads a .bin file to IMEM and optionally runs it.
 //
-// Usage: ./loader <binary.bin> [pci_addr] [iommu_group]
-// Example: ./loader ../sw/uart_test.bin 0000:b1:00.0 12
+// Usage: ./loader <binary.bin> [pci_addr] [iommu_group] [run_time_ms]
+//        ./loader --no-run <binary.bin> [pci_addr] [iommu_group]
+//
+// Example: ./loader ../sw/sum.bin 0000:b1:00.0 12        # Load and run
+//          ./loader --no-run ../sw/uart_test.bin 0000:b1:00.0 12  # Just load
 // ============================================================================
 
 #include "riscv_lib.h"
@@ -83,10 +86,14 @@ int main(int argc, char *argv[]) {
     const char *pci_addr = "0000:31:00.0";
     int iommu_group = 52;
     const char *binary = NULL;
+    int run_time_ms = 10;
+    int no_run = 0;
 
     // Parse arguments
     for (int i = 1; i < argc; i++) {
-        if (strstr(argv[i], ".bin")) {
+        if (strcmp(argv[i], "--no-run") == 0) {
+            no_run = 1;
+        } else if (strstr(argv[i], ".bin")) {
             binary = argv[i];
         } else if (strstr(argv[i], ":")) {
             pci_addr = argv[i];
@@ -94,21 +101,33 @@ int main(int argc, char *argv[]) {
             if (strchr(argv[i], '.')) {
                 pci_addr = argv[i];
             } else {
-                iommu_group = atoi(argv[i]);
+                int val = atoi(argv[i]);
+                if (val < 100) {
+                    iommu_group = val;
+                } else {
+                    run_time_ms = val;
+                }
             }
         }
     }
 
     if (!binary) {
-        printf("Usage: %s <binary.bin> [pci_addr] [iommu_group]\n", argv[0]);
-        printf("Example: %s ../sw/uart_test.bin 0000:b1:00.0 12\n", argv[0]);
+        printf("Usage: %s <binary.bin> [pci_addr] [iommu_group] [run_time_ms]\n", argv[0]);
+        printf("       %s --no-run <binary.bin> [pci_addr] [iommu_group]\n", argv[0]);
+        printf("\nExamples:\n");
+        printf("  %s ../sw/sum.bin 0000:b1:00.0 12        # Load and run\n", argv[0]);
+        printf("  %s --no-run ../sw/uart_test.bin 0000:b1:00.0 12  # Just load\n", argv[0]);
         return 1;
     }
 
     printf("RISC-V Binary Loader\n");
     printf("====================\n");
     printf("PCI: %s, IOMMU group: %d\n", pci_addr, iommu_group);
-    printf("Binary: %s\n\n", binary);
+    printf("Binary: %s\n", binary);
+    if (!no_run) {
+        printf("Run time: %d ms\n", run_time_ms);
+    }
+    printf("\n");
 
     if (vfio_init(pci_addr, iommu_group) < 0) {
         return 1;
@@ -123,7 +142,42 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    printf("\nProgram loaded. Run uart_console to start CPU.\n");
+    if (no_run) {
+        printf("\nProgram loaded (--no-run). Run uart_console to start CPU.\n");
+    } else {
+        // Run CPU
+        printf("\nRunning CPU for %d ms...\n", run_time_ms);
+        cpu_run();
+        usleep(run_time_ms * 1000);
+        cpu_stop();
+
+        // Read results
+        uint32_t pc = read32(BAR_PC);
+        uint32_t cycles = read32(BAR_CYCLES);
+        uint32_t instrs = read32(BAR_INSTRS);
+
+        printf("\n=== Results ===\n");
+        printf("PC:     0x%08X\n", pc);
+        printf("Cycles: %u\n", cycles);
+        printf("Instrs: %u\n", instrs);
+
+        printf("\n=== DMEM Contents ===\n");
+        for (int i = 0; i < 16; i++) {
+            uint32_t val = read_dmem(i);
+            if (val != 0) {
+                printf("  DMEM[%2d] = %10u (0x%08X)\n", i, val, val);
+            }
+        }
+
+        // Check for completion marker
+        uint32_t dmem2 = read_dmem(2);
+        printf("\n=== Verification ===\n");
+        if (dmem2 == 0xDEAD) {
+            printf("Program completed (marker found)\n");
+        } else {
+            printf("Program may not have completed (no marker at DMEM[2])\n");
+        }
+    }
 
     vfio_cleanup();
     return 0;
