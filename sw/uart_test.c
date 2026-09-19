@@ -15,7 +15,7 @@ int main(void) {
     
     // Read back 10 times and print each
     uart_putc('[');
-    for (int i = 0; i < 10; i++) {
+    for (volatile int i = 0; i < 10; i++) {
         unsigned int v = *test_ptr;
         uart_putc(v == 0 ? '0' : '1');
     }
@@ -23,9 +23,9 @@ int main(void) {
     uart_putc('\n');
     
     // Now spin and count
-    int zeros = 0;
-    int ones = 0;
-    for (int i = 0; i < 10000; i++) {  // reduced to 10000
+    volatile int zeros = 0;
+    volatile int ones = 0;
+    for (volatile int i = 0; i < 10000; i++) {
         if (*test_ptr == 0) zeros++;
         else ones++;
     }
