@@ -90,6 +90,19 @@ int main(int argc, char *argv[]) {
     // Start the CPU
     cpu_run();
 
+    // Debug dump of DMEM
+    usleep(50000);  // 50ms for CPU to start
+    printf("\n=== DMEM Debug Dump ===\n");
+    printf("TX_BUFFER[0] (0x80100): 0x%08X\n", read32(TX_BUFFER_OFF));
+    printf("TX_LEN       (0x80200): 0x%08X\n", read32(TX_LEN_OFF));
+    printf("TX_READY     (0x80204): 0x%08X\n", read32(TX_READY_OFF));
+    printf("RX_BUFFER[0] (0x80300): 0x%08X\n", read32(RX_BUFFER_OFF));
+    printf("RX_LEN       (0x80400): 0x%08X\n", read32(RX_LEN_OFF));
+    printf("RX_READY     (0x87FF0): 0x%08X\n", read32(RX_READY_OFF));
+    printf("Addr 0x80404          : 0x%08X\n", read32(DMEM_BASE + 0x404));
+    printf("Addr 0x80800          : 0x%08X\n", read32(DMEM_BASE + 0x800));
+    printf("========================\n\n");
+
     // Enable raw terminal mode for character-by-character input
     enable_raw_mode();
 
