@@ -66,6 +66,11 @@ int main(int argc, char *argv[]) {
 
     // Start CPU
     cpu_run();
+    
+    // Debug: wait and check TX pointers
+    usleep(100000);
+    printf("TX_HEAD=%u TX_TAIL=%u\n", read_dmem(TX_HEAD), read_dmem(TX_TAIL));
+    
     raw_mode();
 
     while (1) {
