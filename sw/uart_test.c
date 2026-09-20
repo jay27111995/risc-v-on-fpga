@@ -4,21 +4,39 @@
 #include "uart.h"
 
 int main(void) {
-    uart_putc('?');
-    
-    // Wait for RX_READY
-    while (!RX_READY);
-    
-    // Read single char
-    char c = RX_BUF & 0xFF;
-    
-    // Clear
-    RX_READY = 0;
-    
-    // Echo
-    uart_putc(c);
+    // Greeting
+    uart_putc('H');
+    uart_putc('e');
+    uart_putc('l');
+    uart_putc('l');
+    uart_putc('o');
+    uart_putc('!');
     uart_putc('\n');
+    uart_putc('>');
     
-    while(1);
+    char buf[64];
+    int pos = 0;
+    
+    while (1) {
+        // Wait for char
+        while (!RX_READY);
+        char c = RX_BUF & 0xFF;
+        RX_READY = 0;
+        
+        if (c == '\r' || c == '\n') {
+            // Echo back the line
+            uart_putc('\n');
+            uart_putc(':');
+            for (int i = 0; i < pos; i++) {
+                uart_putc(buf[i]);
+            }
+            uart_putc('\n');
+            uart_putc('>');
+            pos = 0;
+        } else if (pos < 63) {
+            buf[pos++] = c;
+        }
+    }
+    
     return 0;
 }

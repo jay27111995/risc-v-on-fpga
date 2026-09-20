@@ -81,9 +81,10 @@ int main(int argc, char *argv[]) {
             if (read(STDIN_FILENO, &c, 1) == 1) {
                 if (c == 3) break;  // Ctrl-C
 
-                // Only accept printable ASCII
-                if (c >= 32 && c <= 126) {
+                // Accept printable ASCII and Enter
+                if ((c >= 32 && c <= 126) || c == '\r' || c == '\n') {
                     putchar(c);
+                    if (c == '\r' || c == '\n') putchar('\n');
                     fflush(stdout);
 
                     // Send immediately - 1 char at a time
