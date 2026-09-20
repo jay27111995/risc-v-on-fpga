@@ -62,9 +62,6 @@ int main(int argc, char *argv[]) {
     cpu_run();
     raw_mode();
 
-    char input[256];
-    int input_len = 0;
-
     while (1) {
         // Check CPU TX
         if (read_dmem(TX_READY)) {
@@ -84,28 +81,16 @@ int main(int argc, char *argv[]) {
             if (read(STDIN_FILENO, &c, 1) == 1) {
                 if (c == 3) break;  // Ctrl-C
 
-                // Only accept printable ASCII and Enter
-                if (c == '\r' || c == '\n' || (c >= 32 && c <= 126)) {
+                // Only accept printable ASCII
+                if (c >= 32 && c <= 126) {
                     putchar(c);
-                    if (c == '\r') putchar('\n');
                     fflush(stdout);
 
-                    if (c == '\r' || c == '\n') {
-                        if (input_len > 0) {
-                            while (read_dmem(RX_READY)) usleep(100);
-                            // Write all buffered chars
-                            for (int i = 0; i < input_len; i++) {
-                                write_dmem(RX_BUF + i, input[i]);
-                            }
-                            write_dmem(RX_LEN, input_len);
-                            write_dmem(RX_READY, 1);
-                            input_len = 0;
-                        }
-                    } else if (input_len < 255) {
-                        input[input_len++] = c;
-                    }
+                    // Send immediately - 1 char at a time
+                    while (read_dmem(RX_READY)) usleep(100);
+                    write_dmem(RX_BUF, c);
+                    write_dmem(RX_READY, 1);
                 }
-                // Ignore other chars (arrows, function keys, etc.)
             }
         }
         usleep(1000);
