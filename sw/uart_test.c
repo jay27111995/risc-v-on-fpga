@@ -4,8 +4,12 @@
 #include "uart.h"
 
 int main(void) {
+    // Spell out "Hello" char by char
     uart_putc('H');
-    uart_putc('i');
+    uart_putc('e');
+    uart_putc('l');
+    uart_putc('l');
+    uart_putc('o');
     uart_putc('\n');
     
     while(1);
