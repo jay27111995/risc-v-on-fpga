@@ -23,7 +23,7 @@ int main(void) {
         char c = RX_BUF & 0xFF;
         RX_READY = 0;
         
-        if (c == '\r' || c == '\n') {
+        if (c == ';') {
             // Echo back the line
             uart_putc('\n');
             uart_putc(':');
@@ -33,7 +33,7 @@ int main(void) {
             uart_putc('\n');
             uart_putc('>');
             pos = 0;
-        } else if (pos < 63) {
+        } else if (c >= 32 && c <= 126 && pos < 63) {
             buf[pos++] = c;
         }
     }

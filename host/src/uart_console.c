@@ -81,13 +81,12 @@ int main(int argc, char *argv[]) {
             if (read(STDIN_FILENO, &c, 1) == 1) {
                 if (c == 3) break;  // Ctrl-C
 
-                // Accept printable ASCII and Enter
-                if ((c >= 32 && c <= 126) || c == '\r' || c == '\n') {
+                // Only printable ASCII (32-126)
+                if (c >= 32 && c <= 126) {
                     putchar(c);
-                    if (c == '\r' || c == '\n') putchar('\n');
                     fflush(stdout);
 
-                    // Send immediately - 1 char at a time
+                    // Send immediately
                     while (read_dmem(RX_READY)) usleep(100);
                     write_dmem(RX_BUF, c);
                     write_dmem(RX_READY, 1);
