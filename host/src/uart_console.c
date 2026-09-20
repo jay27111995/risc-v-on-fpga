@@ -1,10 +1,7 @@
 // Virtual UART Console
-// ============================================================================
 // Host-side terminal for RISC-V virtual UART over PCIe.
-// Polls DMEM for CPU output, can send input to CPU.
 //
 // Usage: sudo ./uart_console <pci_addr> <iommu_group>
-// ============================================================================
 
 #include "pcie_vfio.h"
 #include "riscv_lib.h"
@@ -17,165 +14,98 @@
 #include <termios.h>
 #include <unistd.h>
 
-// DMEM offsets for virtual UART (matches uart.h on CPU side)
-#define DMEM_BASE       0x80000
+// DMEM offsets (matches uart.h)
+#define DMEM      0x80000
+#define TX_BUF    (DMEM + 0x100)
+#define TX_LEN    (DMEM + 0x200)
+#define TX_READY  (DMEM + 0x204)
+#define RX_BUF    (DMEM + 0x300)
+#define RX_LEN    (DMEM + 0x400)
+#define RX_READY  (DMEM + 0x404)
 
-#define TX_BUFFER_OFF   (DMEM_BASE + 0x100)
-#define TX_LEN_OFF      (DMEM_BASE + 0x200)
-#define TX_READY_OFF    (DMEM_BASE + 0x204)
-
-#define RX_BUFFER_OFF   (DMEM_BASE + 0x300)
-#define RX_LEN_OFF      (DMEM_BASE + 0x400)
-#define RX_READY_OFF    (DMEM_BASE + 0x7FF0)  // Moved to end of DMEM for testing
-
-#define UART_BUF_SIZE   256
-
-// Terminal settings for raw mode
 static struct termios orig_termios;
-static int raw_mode = 0;
 
-void disable_raw_mode(void) {
-    if (raw_mode) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
-        raw_mode = 0;
-    }
+void cleanup(void) {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
 }
 
-void enable_raw_mode(void) {
+void raw_mode(void) {
     tcgetattr(STDIN_FILENO, &orig_termios);
-    atexit(disable_raw_mode);
-
+    atexit(cleanup);
     struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON);  // Disable echo and canonical mode
-    raw.c_cc[VMIN] = 0;               // Non-blocking
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-    raw_mode = 1;
 }
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
         fprintf(stderr, "Usage: %s <pci_addr> <iommu_group>\n", argv[0]);
-        fprintf(stderr, "Example: %s 0000:b1:00.0 12\n", argv[0]);
         return 1;
     }
 
-    const char *pci_addr = argv[1];
-    int iommu_group = atoi(argv[2]);
+    printf("UART Console - %s (group %s)\n", argv[1], argv[2]);
+    printf("Ctrl-C to exit\n\n");
 
-    printf("RISC-V Virtual UART Console\n");
-    printf("===========================\n");
-    printf("PCI: %s, IOMMU group: %d\n", pci_addr, iommu_group);
-    printf("Press Ctrl-C to exit\n\n");
-
-    // Initialize VFIO
-    if (vfio_init(pci_addr, iommu_group) < 0) {
-        fprintf(stderr, "Failed to initialize VFIO\n");
+    if (vfio_init(argv[1], atoi(argv[2])) < 0) {
+        fprintf(stderr, "VFIO init failed\n");
         return 1;
     }
 
-    // Clear mailbox registers and buffers
-    write32(TX_READY_OFF, 0);
-    write32(TX_LEN_OFF, 0);
-    write32(RX_LEN_OFF, 0);
-    // Clear both buffer areas
-    for (int i = 0; i < 256; i += 4) {
-        write32(TX_BUFFER_OFF + i, 0);
-        write32(RX_BUFFER_OFF + i, 0);
-    }
-    // Clear RX_READY LAST (after everything else is zero)
-    write32(RX_READY_OFF, 0);
-    usleep(10000);  // 10ms delay to ensure writes complete
+    // Clear UART registers
+    write32(TX_READY, 0);
+    write32(RX_READY, 0);
+    write32(RX_LEN, 0);
 
-    // Start the CPU
+    // Start CPU
     cpu_run();
+    raw_mode();
 
-    // Debug dump of DMEM
-    usleep(100000);  // 100ms for CPU to run a bit
-    printf("\n=== DMEM Debug Dump ===\n");
-    printf("TX_BUFFER[0] (0x%05X): 0x%08X\n", TX_BUFFER_OFF, read32(TX_BUFFER_OFF));
-    printf("TX_LEN       (0x%05X): 0x%08X\n", TX_LEN_OFF, read32(TX_LEN_OFF));
-    printf("TX_READY     (0x%05X): 0x%08X\n", TX_READY_OFF, read32(TX_READY_OFF));
-    printf("RX_READY     (0x%05X): 0x%08X\n", RX_READY_OFF, read32(RX_READY_OFF));
-    printf("========================\n\n");
-
-    // Enable raw terminal mode for character-by-character input
-    enable_raw_mode();
-
-    printf("Console ready. CPU output will appear below:\n");
-    printf("--------------------------------------------\n");
-    fflush(stdout);
-
-    // Main polling loop
-    char input_buf[UART_BUF_SIZE];
+    char input[256];
     int input_len = 0;
 
     while (1) {
-        // Check for CPU output (TX_READY == 1)
-        if (read32(TX_READY_OFF) == 1) {
-            int len = read32(TX_LEN_OFF);
-            if (len > 0 && len <= UART_BUF_SIZE) {
-                // Read buffer word by word, extract bytes
-                for (int i = 0; i < len; i++) {
-                    uint32_t word_off = (i / 4) * 4;
-                    uint32_t byte_pos = i % 4;
-                    uint32_t word = read32(TX_BUFFER_OFF + word_off);
-                    char c = (word >> (byte_pos * 8)) & 0xFF;
-                    putchar(c);
-                }
+        // Check CPU TX
+        if (read32(TX_READY)) {
+            int len = read32(TX_LEN);
+            if (len > 0 && len < 256) {
+                // Read char (first byte of word)
+                uint32_t word = read32(TX_BUF);
+                putchar(word & 0xFF);
                 fflush(stdout);
             }
-            // Acknowledge: ready for more
-            write32(TX_READY_OFF, 0);
+            write32(TX_READY, 0);
         }
 
-        // Check for keyboard input
-        struct pollfd pfd = {.fd = STDIN_FILENO, .events = POLLIN};
-        if (poll(&pfd, 1, 1) > 0) {  // 1ms timeout
+        // Check keyboard
+        struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
+        if (poll(&pfd, 1, 1) > 0) {
             char c;
             if (read(STDIN_FILENO, &c, 1) == 1) {
-                // Ctrl-C to exit
-                if (c == 3) {
-                    printf("\n[Console terminated]\n");
-                    break;
-                }
+                if (c == 3) break;  // Ctrl-C
 
-                // Echo locally
                 putchar(c);
                 if (c == '\r') putchar('\n');
                 fflush(stdout);
 
-                // Buffer input until newline
                 if (c == '\r' || c == '\n') {
                     if (input_len > 0) {
-                        // Wait for CPU to be ready
-                        while (read32(RX_READY_OFF) == 1) {
-                            usleep(100);
-                        }
-
-                        // Write to RX buffer - pack bytes into words
-                        for (int i = 0; i < input_len; i += 4) {
-                            uint32_t word = 0;
-                            for (int j = 0; j < 4 && (i + j) < input_len; j++) {
-                                word |= ((uint32_t)(unsigned char)input_buf[i + j]) << (j * 8);
-                            }
-                            write32(RX_BUFFER_OFF + i, word);
-                        }
-                        write32(RX_LEN_OFF, input_len);
-                        write32(RX_READY_OFF, 1);  // Signal CPU
-
+                        while (read32(RX_READY)) usleep(100);
+                        write32(RX_BUF, input[0]);  // Single char for now
+                        write32(RX_LEN, 1);
+                        write32(RX_READY, 1);
                         input_len = 0;
                     }
-                } else if (input_len < UART_BUF_SIZE - 1) {
-                    input_buf[input_len++] = c;
+                } else if (input_len < 255) {
+                    input[input_len++] = c;
                 }
             }
         }
-
-        usleep(1000);  // 1ms polling interval
+        usleep(1000);
     }
 
-    disable_raw_mode();
+    printf("\n[Exit]\n");
     vfio_cleanup();
     return 0;
 }
