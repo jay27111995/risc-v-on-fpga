@@ -142,6 +142,13 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Verify UART registers are cleared
+    printf("\nUART registers after init:\n");
+    printf("  TX_READY (0x%03X): %u\n", 0x204/4, read_dmem(0x204/4));
+    printf("  TX_LEN   (0x%03X): %u\n", 0x200/4, read_dmem(0x200/4));
+    printf("  RX_READY (0x%03X): %u\n", 0x404/4, read_dmem(0x404/4));
+    printf("  RX_LEN   (0x%03X): %u\n", 0x400/4, read_dmem(0x400/4));
+
     if (no_run) {
         printf("\nProgram loaded (--no-run). Run uart_console to start CPU.\n");
     } else {
