@@ -1,8 +1,4 @@
 // Virtual UART Console - Circular Buffer Implementation
-// Host-side terminal for RISC-V virtual UART over PCIe.
-//
-// Usage: sudo ./uart_console <pci_addr> <iommu_group>
-
 #include "pcie_vfio.h"
 #include "riscv_lib.h"
 
@@ -15,17 +11,15 @@
 #include <unistd.h>
 
 // TX circular buffer (CPU writes, Host reads)
-// DMEM word indices
-#define TX_BUF   (0x100 / 4)   // 16 words at 0x100-0x13F
-#define TX_HEAD  (0x140 / 4)   // CPU increments after write
-#define TX_TAIL  (0x144 / 4)   // Host increments after read
+#define TX_BUF   (0x100 / 4)
+#define TX_HEAD  (0x140 / 4)
+#define TX_TAIL  (0x144 / 4)
 
 // RX circular buffer (Host writes, CPU reads)
-#define RX_BUF   (0x200 / 4)   // 16 words at 0x200-0x23F
-#define RX_HEAD  (0x240 / 4)   // Host increments after write
-#define RX_TAIL  (0x244 / 4)   // CPU increments after read
+#define RX_BUF   (0x200 / 4)
+#define RX_HEAD  (0x240 / 4)
+#define RX_TAIL  (0x244 / 4)
 
-#define BUF_SIZE 16
 #define BUF_MASK 15
 
 static struct termios orig_termios;
@@ -81,13 +75,11 @@ int main(int argc, char *argv[]) {
         if (tx_tail != tx_head) {
             unsigned int word = read_dmem(TX_BUF + tx_tail);
             char c = word & 0xFF;
-            printf("[%c]", c);  // Debug
+            printf("[%c]", c);
             fflush(stdout);
             tx_tail = (tx_tail + 1) & BUF_MASK;
             write_dmem(TX_TAIL, tx_tail);
         }
-        }
-        fflush(stdout);
 
         // Check keyboard
         struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
@@ -96,7 +88,6 @@ int main(int argc, char *argv[]) {
             if (read(STDIN_FILENO, &c, 1) == 1) {
                 if (c == 3) break;  // Ctrl-C
 
-                // Only printable ASCII
                 if (c >= 32 && c <= 126) {
                     putchar(c);
                     fflush(stdout);
@@ -106,7 +97,6 @@ int main(int argc, char *argv[]) {
                     unsigned int rx_next = (rx_head + 1) & BUF_MASK;
                     unsigned int rx_tail = read_dmem(RX_TAIL);
                     
-                    // Check not full
                     if (rx_next != rx_tail) {
                         write_dmem(RX_BUF + rx_head, c);
                         write_dmem(RX_HEAD, rx_next);
