@@ -13,8 +13,14 @@ int main(void) {
     uart_putc('0' + (ready & 0xF));
     uart_putc('\n');
     
-    // Wait for RX_READY
-    while (!RX_READY);
+    // Wait for RX_READY with explicit loop
+    uart_putc('W');  // Waiting...
+    volatile unsigned int *rx_ready = (volatile unsigned int *)0x404;
+    while (*rx_ready == 0) {
+        // spin
+    }
+    uart_putc('!');  // Got it
+    uart_putc('\n');
     
     // Print RX_LEN
     unsigned int len = RX_LEN;
