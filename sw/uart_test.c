@@ -6,36 +6,19 @@
 int main(void) {
     // Greeting
     uart_putc('H');
-    uart_putc('e');
-    uart_putc('l');
-    uart_putc('l');
-    uart_putc('o');
+    uart_putc('i');
     uart_putc('!');
     uart_putc('\n');
-    uart_putc('>');
     
-    char buf[64];
-    int pos = 0;
-    
+    // Simple echo loop - no buffering
     while (1) {
         // Wait for char
         while (!RX_READY);
         char c = RX_BUF & 0xFF;
         RX_READY = 0;
         
-        if (c == ';') {
-            // Echo back the line
-            uart_putc('\n');
-            uart_putc(':');
-            for (int i = 0; i < pos; i++) {
-                uart_putc(buf[i]);
-            }
-            uart_putc('\n');
-            uart_putc('>');
-            pos = 0;
-        } else if (c >= 32 && c <= 126 && pos < 63) {
-            buf[pos++] = c;
-        }
+        // Echo it back
+        uart_putc(c);
     }
     
     return 0;
