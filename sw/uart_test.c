@@ -12,9 +12,9 @@ int main(void) {
     // Read and echo
     int len = RX_LEN;
     uart_puts("You typed: ");
+    volatile unsigned int *rx_buf = (volatile unsigned int *)0x300;
     for (int i = 0; i < len; i++) {
-        uint32_t word = *(volatile unsigned int *)(0x300 + i * 4);
-        uart_putc(word & 0xFF);
+        uart_putc(rx_buf[i] & 0xFF);
     }
     uart_putc('\n');
     
