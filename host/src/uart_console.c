@@ -55,6 +55,7 @@ int main(int argc, char *argv[]) {
 
     // Clear UART registers
     write32(TX_READY, 0);
+    write32(TX_LEN, 0);
     write32(RX_READY, 0);
     write32(RX_LEN, 0);
 
