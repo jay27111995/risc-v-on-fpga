@@ -78,11 +78,14 @@ int main(int argc, char *argv[]) {
         unsigned int tx_head = read_dmem(TX_HEAD);
         unsigned int tx_tail = read_dmem(TX_TAIL);
         
-        while (tx_tail != tx_head) {
+        if (tx_tail != tx_head) {
             unsigned int word = read_dmem(TX_BUF + tx_tail);
-            putchar(word & 0xFF);
+            char c = word & 0xFF;
+            printf("[%c]", c);  // Debug
+            fflush(stdout);
             tx_tail = (tx_tail + 1) & BUF_MASK;
             write_dmem(TX_TAIL, tx_tail);
+        }
         }
         fflush(stdout);
 
