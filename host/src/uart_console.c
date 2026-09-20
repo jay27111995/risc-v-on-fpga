@@ -93,8 +93,11 @@ int main(int argc, char *argv[]) {
                     if (c == '\r' || c == '\n') {
                         if (input_len > 0) {
                             while (read_dmem(RX_READY)) usleep(100);
-                            write_dmem(RX_BUF, input[0]);
-                            write_dmem(RX_LEN, 1);
+                            // Write all buffered chars
+                            for (int i = 0; i < input_len; i++) {
+                                write_dmem(RX_BUF + i, input[i]);
+                            }
+                            write_dmem(RX_LEN, input_len);
                             write_dmem(RX_READY, 1);
                             input_len = 0;
                         }
