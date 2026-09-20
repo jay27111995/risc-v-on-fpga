@@ -84,21 +84,25 @@ int main(int argc, char *argv[]) {
             if (read(STDIN_FILENO, &c, 1) == 1) {
                 if (c == 3) break;  // Ctrl-C
 
-                putchar(c);
-                if (c == '\r') putchar('\n');
-                fflush(stdout);
+                // Only accept printable ASCII and Enter
+                if (c == '\r' || c == '\n' || (c >= 32 && c <= 126)) {
+                    putchar(c);
+                    if (c == '\r') putchar('\n');
+                    fflush(stdout);
 
-                if (c == '\r' || c == '\n') {
-                    if (input_len > 0) {
-                        while (read_dmem(RX_READY)) usleep(100);
-                        write_dmem(RX_BUF, input[0]);
-                        write_dmem(RX_LEN, 1);
-                        write_dmem(RX_READY, 1);
-                        input_len = 0;
+                    if (c == '\r' || c == '\n') {
+                        if (input_len > 0) {
+                            while (read_dmem(RX_READY)) usleep(100);
+                            write_dmem(RX_BUF, input[0]);
+                            write_dmem(RX_LEN, 1);
+                            write_dmem(RX_READY, 1);
+                            input_len = 0;
+                        }
+                    } else if (input_len < 255) {
+                        input[input_len++] = c;
                     }
-                } else if (input_len < 255) {
-                    input[input_len++] = c;
                 }
+                // Ignore other chars (arrows, function keys, etc.)
             }
         }
         usleep(1000);
