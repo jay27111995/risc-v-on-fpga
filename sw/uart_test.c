@@ -4,12 +4,19 @@
 #include "uart.h"
 
 int main(void) {
-    uart_putc('?');  // Prompt
+    uart_putc('?');
+    
+    // Print RX_READY before waiting
+    unsigned int ready = RX_READY;
+    uart_putc('R');
+    uart_putc('=');
+    uart_putc('0' + (ready & 0xF));
+    uart_putc('\n');
     
     // Wait for RX_READY
     while (!RX_READY);
     
-    // Print RX_LEN as hex
+    // Print RX_LEN
     unsigned int len = RX_LEN;
     uart_putc('L');
     uart_putc('=');
@@ -17,7 +24,7 @@ int main(void) {
     uart_putc('0' + (len & 0xF));
     uart_putc('\n');
     
-    // Just read first char
+    // First char
     char c = RX_BUF & 0xFF;
     uart_putc(c);
     uart_putc('\n');
