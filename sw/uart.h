@@ -1,34 +1,59 @@
 // UART Library for RISC-V CPU
-// Virtual UART over shared DMEM - 1 char at a time
+// Virtual UART over shared DMEM - circular buffer implementation
 //
 // Memory map (DMEM offsets):
-//   0x100: TX_BUF   - CPU writes char, host reads
-//   0x204: TX_READY - 1 = data ready for host
-//   0x300: RX_BUF   - Host writes char, CPU reads
-//   0x404: RX_READY - 1 = data ready for CPU
+//   TX (CPU → Host):
+//     0x100-0x13F: TX_BUF[16]  - 16-word circular buffer
+//     0x140:       TX_HEAD     - CPU writes here (0-15)
+//     0x144:       TX_TAIL     - Host reads from here (0-15)
+//
+//   RX (Host → CPU):
+//     0x200-0x23F: RX_BUF[16]  - 16-word circular buffer
+//     0x240:       RX_HEAD     - Host writes here (0-15)
+//     0x244:       RX_TAIL     - CPU reads from here (0-15)
 
 #ifndef UART_H
 #define UART_H
 
-#define TX_BUF   (*(volatile unsigned int *)0x100)
-#define TX_LEN   (*(volatile unsigned int *)0x200)
-#define TX_READY (*(volatile unsigned int *)0x204)
-#define RX_BUF   (*(volatile unsigned int *)0x300)
-#define RX_READY (*(volatile unsigned int *)0x404)
+// TX circular buffer (CPU writes, Host reads)
+#define TX_BUF   ((volatile unsigned int *)0x100)
+#define TX_HEAD  (*(volatile unsigned int *)0x140)
+#define TX_TAIL  (*(volatile unsigned int *)0x144)
 
-// Send single char (blocking)
+// RX circular buffer (Host writes, CPU reads)
+#define RX_BUF   ((volatile unsigned int *)0x200)
+#define RX_HEAD  (*(volatile unsigned int *)0x240)
+#define RX_TAIL  (*(volatile unsigned int *)0x244)
+
+#define BUF_SIZE 16
+#define BUF_MASK 15
+
+// Send single char (blocking if buffer full)
 static inline void uart_putc(char c) {
-    while (TX_READY);
-    TX_BUF = c;
-    TX_LEN = 1;
-    TX_READY = 1;
+    unsigned int head = TX_HEAD;
+    unsigned int next = (head + 1) & BUF_MASK;
+    
+    // Wait if buffer full
+    while (next == TX_TAIL);
+    
+    TX_BUF[head] = c;
+    TX_HEAD = next;
 }
 
-// Get single char (blocking)
+// Check if RX data available
+static inline int uart_rx_ready(void) {
+    return RX_HEAD != RX_TAIL;
+}
+
+// Get single char (blocking if buffer empty)
 static inline char uart_getc(void) {
-    while (!RX_READY);
-    char c = RX_BUF & 0xFF;
-    RX_READY = 0;
+    unsigned int tail = RX_TAIL;
+    
+    // Wait if buffer empty
+    while (RX_HEAD == tail);
+    
+    char c = RX_BUF[tail] & 0xFF;
+    RX_TAIL = (tail + 1) & BUF_MASK;
     return c;
 }
 

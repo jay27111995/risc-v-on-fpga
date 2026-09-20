@@ -1,4 +1,4 @@
-// Virtual UART Console
+// Virtual UART Console - Circular Buffer Implementation
 // Host-side terminal for RISC-V virtual UART over PCIe.
 //
 // Usage: sudo ./uart_console <pci_addr> <iommu_group>
@@ -14,13 +14,19 @@
 #include <termios.h>
 #include <unistd.h>
 
-// DMEM word indices (matches uart.h byte offsets / 4)
-#define TX_BUF    (0x100 / 4)   // 64
-#define TX_LEN    (0x200 / 4)   // 128
-#define TX_READY  (0x204 / 4)   // 129
-#define RX_BUF    (0x300 / 4)   // 192
-#define RX_LEN    (0x400 / 4)   // 256
-#define RX_READY  (0x404 / 4)   // 257
+// TX circular buffer (CPU writes, Host reads)
+// DMEM word indices
+#define TX_BUF   (0x100 / 4)   // 16 words at 0x100-0x13F
+#define TX_HEAD  (0x140 / 4)   // CPU increments after write
+#define TX_TAIL  (0x144 / 4)   // Host increments after read
+
+// RX circular buffer (Host writes, CPU reads)
+#define RX_BUF   (0x200 / 4)   // 16 words at 0x200-0x23F
+#define RX_HEAD  (0x240 / 4)   // Host increments after write
+#define RX_TAIL  (0x244 / 4)   // CPU increments after read
+
+#define BUF_SIZE 16
+#define BUF_MASK 15
 
 static struct termios orig_termios;
 
@@ -52,27 +58,28 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Clear UART registers
-    write_dmem(TX_READY, 0);
-    write_dmem(TX_LEN, 0);
-    write_dmem(RX_READY, 0);
-    write_dmem(RX_LEN, 0);
+    // Clear circular buffer pointers
+    write_dmem(TX_HEAD, 0);
+    write_dmem(TX_TAIL, 0);
+    write_dmem(RX_HEAD, 0);
+    write_dmem(RX_TAIL, 0);
 
     // Start CPU
     cpu_run();
     raw_mode();
 
     while (1) {
-        // Check CPU TX
-        if (read_dmem(TX_READY)) {
-            int len = read_dmem(TX_LEN);
-            if (len > 0 && len < 256) {
-                uint32_t word = read_dmem(TX_BUF);
-                putchar(word & 0xFF);
-                fflush(stdout);
-            }
-            write_dmem(TX_READY, 0);
+        // Check CPU TX (read from circular buffer)
+        unsigned int tx_head = read_dmem(TX_HEAD);
+        unsigned int tx_tail = read_dmem(TX_TAIL);
+        
+        while (tx_tail != tx_head) {
+            unsigned int word = read_dmem(TX_BUF + tx_tail);
+            putchar(word & 0xFF);
+            tx_tail = (tx_tail + 1) & BUF_MASK;
+            write_dmem(TX_TAIL, tx_tail);
         }
+        fflush(stdout);
 
         // Check keyboard
         struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
@@ -81,15 +88,21 @@ int main(int argc, char *argv[]) {
             if (read(STDIN_FILENO, &c, 1) == 1) {
                 if (c == 3) break;  // Ctrl-C
 
-                // Only printable ASCII (32-126)
+                // Only printable ASCII
                 if (c >= 32 && c <= 126) {
                     putchar(c);
                     fflush(stdout);
 
-                    // Send immediately
-                    while (read_dmem(RX_READY)) usleep(100);
-                    write_dmem(RX_BUF, c);
-                    write_dmem(RX_READY, 1);
+                    // Write to RX circular buffer
+                    unsigned int rx_head = read_dmem(RX_HEAD);
+                    unsigned int rx_next = (rx_head + 1) & BUF_MASK;
+                    unsigned int rx_tail = read_dmem(RX_TAIL);
+                    
+                    // Check not full
+                    if (rx_next != rx_tail) {
+                        write_dmem(RX_BUF + rx_head, c);
+                        write_dmem(RX_HEAD, rx_next);
+                    }
                 }
             }
         }
