@@ -20,6 +20,7 @@ int main(void) {
     
     // Clear RX
     RX_READY = 0;
+    RX_LEN = 0;
     
     uart_puts("Done!\n");
     
