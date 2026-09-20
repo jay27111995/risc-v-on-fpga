@@ -4,12 +4,20 @@
 #include "uart.h"
 
 int main(void) {
-    // Spell out "Hello" char by char
-    uart_putc('H');
-    uart_putc('e');
-    uart_putc('l');
-    uart_putc('l');
-    uart_putc('o');
+    uart_putc('?');  // Prompt
+    
+    // Wait for RX_READY
+    while (!RX_READY);
+    
+    // Read first char
+    char c = RX_BUF & 0xFF;
+    
+    // Clear
+    RX_READY = 0;
+    RX_LEN = 0;
+    
+    // Echo it
+    uart_putc(c);
     uart_putc('\n');
     
     while(1);
