@@ -9,19 +9,17 @@ int main(void) {
     // Wait for RX_READY
     while (!RX_READY);
     
-    // Read first 2 chars manually (no loop)
+    // Get length and echo all chars
+    volatile int len = RX_LEN;
     volatile unsigned int *rx_buf = (volatile unsigned int *)0x300;
-    char c0 = rx_buf[0] & 0xFF;
-    char c1 = rx_buf[1] & 0xFF;
+    for (volatile int i = 0; i < len; i++) {
+        uart_putc(rx_buf[i] & 0xFF);
+    }
+    uart_putc('\n');
     
     // Clear
     RX_READY = 0;
     RX_LEN = 0;
-    
-    // Echo them
-    uart_putc(c0);
-    uart_putc(c1);
-    uart_putc('\n');
     
     while(1);
     return 0;
