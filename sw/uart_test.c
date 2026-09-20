@@ -10,15 +10,10 @@ int main(void) {
     uart_putc('!');
     uart_putc('\n');
     
-    // Simple echo loop - no buffering
+    // Simple echo loop
     while (1) {
-        // Wait for char
-        while (!RX_READY);
-        char c = RX_BUF & 0xFF;
-        RX_READY = 0;
-        
-        // Echo it back
-        uart_putc(c);
+        char c = uart_getc();  // Blocking read
+        uart_putc(c);          // Echo back
     }
     
     return 0;
