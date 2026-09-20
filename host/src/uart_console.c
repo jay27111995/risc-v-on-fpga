@@ -14,14 +14,13 @@
 #include <termios.h>
 #include <unistd.h>
 
-// DMEM offsets (matches uart.h)
-#define DMEM      0x80000
-#define TX_BUF    (DMEM + 0x100)
-#define TX_LEN    (DMEM + 0x200)
-#define TX_READY  (DMEM + 0x204)
-#define RX_BUF    (DMEM + 0x300)
-#define RX_LEN    (DMEM + 0x400)
-#define RX_READY  (DMEM + 0x404)
+// DMEM word indices (matches uart.h byte offsets / 4)
+#define TX_BUF    (0x100 / 4)   // 64
+#define TX_LEN    (0x200 / 4)   // 128
+#define TX_READY  (0x204 / 4)   // 129
+#define RX_BUF    (0x300 / 4)   // 192
+#define RX_LEN    (0x400 / 4)   // 256
+#define RX_READY  (0x404 / 4)   // 257
 
 static struct termios orig_termios;
 
@@ -54,10 +53,10 @@ int main(int argc, char *argv[]) {
     }
 
     // Clear UART registers
-    write32(TX_READY, 0);
-    write32(TX_LEN, 0);
-    write32(RX_READY, 0);
-    write32(RX_LEN, 0);
+    write_dmem(TX_READY, 0);
+    write_dmem(TX_LEN, 0);
+    write_dmem(RX_READY, 0);
+    write_dmem(RX_LEN, 0);
 
     // Start CPU
     cpu_run();
@@ -68,15 +67,14 @@ int main(int argc, char *argv[]) {
 
     while (1) {
         // Check CPU TX
-        if (read32(TX_READY)) {
-            int len = read32(TX_LEN);
+        if (read_dmem(TX_READY)) {
+            int len = read_dmem(TX_LEN);
             if (len > 0 && len < 256) {
-                // Read char (first byte of word)
-                uint32_t word = read32(TX_BUF);
+                uint32_t word = read_dmem(TX_BUF);
                 putchar(word & 0xFF);
                 fflush(stdout);
             }
-            write32(TX_READY, 0);
+            write_dmem(TX_READY, 0);
         }
 
         // Check keyboard
@@ -92,10 +90,10 @@ int main(int argc, char *argv[]) {
 
                 if (c == '\r' || c == '\n') {
                     if (input_len > 0) {
-                        while (read32(RX_READY)) usleep(100);
-                        write32(RX_BUF, input[0]);  // Single char for now
-                        write32(RX_LEN, 1);
-                        write32(RX_READY, 1);
+                        while (read_dmem(RX_READY)) usleep(100);
+                        write_dmem(RX_BUF, input[0]);
+                        write_dmem(RX_LEN, 1);
+                        write_dmem(RX_READY, 1);
                         input_len = 0;
                     }
                 } else if (input_len < 255) {
