@@ -2,10 +2,11 @@
 #define UART_H
 
 // UART circular buffer addresses
-#define TX_BUF    ((volatile char*)0x100)
+// Each buffer entry is a 32-bit word, char in low byte
+#define TX_BUF    ((volatile int*)0x100)
 #define TX_HEAD   ((volatile int*)0x140)
 #define TX_TAIL   ((volatile int*)0x144)
-#define RX_BUF    ((volatile char*)0x200)
+#define RX_BUF    ((volatile int*)0x200)
 #define RX_HEAD   ((volatile int*)0x240)
 #define RX_TAIL   ((volatile int*)0x244)
 
@@ -17,7 +18,7 @@ static inline void putchar(char c) {
     // Wait if buffer full
     while (next == *TX_TAIL);
     
-    TX_BUF[head] = c;
+    TX_BUF[head] = (int)c;  // Write char as word
     *TX_HEAD = next;
 }
 
@@ -28,7 +29,7 @@ static inline char getchar(void) {
     // Wait if buffer empty
     while (tail == *RX_HEAD);
     
-    char c = RX_BUF[tail];
+    char c = (char)RX_BUF[tail];  // Read word, take low byte
     *RX_TAIL = (tail + 1) & 0xF;
     return c;
 }
