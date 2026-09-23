@@ -103,8 +103,9 @@ static int load_elf(const char *filename) {
             uint32_t *words = (uint32_t *)data;
             int num_words = (shdr->sh_size + 3) / 4;
             for (int w = 0; w < num_words; w++) {
-                uint32_t addr = shdr->sh_addr + w * 4;
-                write_dmem(addr / 4, words[w]);
+                // VMA is 0x10000xxx, strip high bits to get DMEM offset
+                uint32_t dmem_addr = (shdr->sh_addr & 0xFFFF) + w * 4;
+                write_dmem(dmem_addr / 4, words[w]);
             }
         }
 
