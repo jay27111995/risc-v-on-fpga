@@ -204,17 +204,10 @@ module riscv_soc (
     // Host will load program before running CPU
 
     // =========================================================================
-    // DMEM - Data Memory (32KB) - Block RAM for Zephyr RTOS
+    // DMEM - Data Memory (32KB) - Using modular dmem.sv
     // Host address: 0x40000 - 0x47FFF (32KB)
     // CPU address: 0x00000 - 0x07FFF (direct)
     // =========================================================================
-    //
-    // Split into 4 byte-wide RAMs for clean M20K inference with byte enables.
-
-    (* ramstyle = "M20K" *) logic [7:0] dmem_b0 [0:8191];  // Byte 0
-    (* ramstyle = "M20K" *) logic [7:0] dmem_b1 [0:8191];  // Byte 1
-    (* ramstyle = "M20K" *) logic [7:0] dmem_b2 [0:8191];  // Byte 2
-    (* ramstyle = "M20K" *) logic [7:0] dmem_b3 [0:8191];  // Byte 3
 
     // CPU port signals
     logic [31:0] cpu_dmem_addr;
@@ -222,6 +215,7 @@ module riscv_soc (
     logic [31:0] cpu_dmem_rdata;
     logic        cpu_dmem_we;
     logic [3:0]  cpu_dmem_be;  // Byte enables for byte/half stores
+    logic        cpu_dmem_rdata_valid;
 
     // Address indexing (word-aligned, 32-bit entries) - 13 bits for 8K words
     wire [12:0] cpu_dmem_idx  = cpu_dmem_addr[14:2];
@@ -230,53 +224,35 @@ module riscv_soc (
     // Write enables - DMEM at 0x8_0000 - 0x8_7FFF (32KB)
     wire is_dmem_host = (addr[19:15] == 5'b10000);  // 0x80000-0x87FFF
     wire host_dmem_wen = wen && is_dmem_host;
+    wire host_dmem_ren = ren && is_dmem_host;
     wire cpu_dmem_wen  = cpu_dmem_we && cpu_running && !host_dmem_wen;
 
-    // Byte 0
-    always_ff @(posedge clk) begin
-        if (host_dmem_wen)
-            dmem_b0[host_dmem_idx] <= wdata[7:0];
-        else if (cpu_dmem_wen && cpu_dmem_be[0])
-            dmem_b0[cpu_dmem_idx] <= cpu_dmem_wdata[7:0];
-    end
-
-    // Byte 1
-    always_ff @(posedge clk) begin
-        if (host_dmem_wen)
-            dmem_b1[host_dmem_idx] <= wdata[15:8];
-        else if (cpu_dmem_wen && cpu_dmem_be[1])
-            dmem_b1[cpu_dmem_idx] <= cpu_dmem_wdata[15:8];
-    end
-
-    // Byte 2
-    always_ff @(posedge clk) begin
-        if (host_dmem_wen)
-            dmem_b2[host_dmem_idx] <= wdata[23:16];
-        else if (cpu_dmem_wen && cpu_dmem_be[2])
-            dmem_b2[cpu_dmem_idx] <= cpu_dmem_wdata[23:16];
-    end
-
-    // Byte 3
-    always_ff @(posedge clk) begin
-        if (host_dmem_wen)
-            dmem_b3[host_dmem_idx] <= wdata[31:24];
-        else if (cpu_dmem_wen && cpu_dmem_be[3])
-            dmem_b3[cpu_dmem_idx] <= cpu_dmem_wdata[31:24];
-    end
-
-    // CPU read (registered for Block RAM timing)
-    always_ff @(posedge clk) begin
-        cpu_dmem_rdata <= {dmem_b3[cpu_dmem_idx], dmem_b2[cpu_dmem_idx],
-                          dmem_b1[cpu_dmem_idx], dmem_b0[cpu_dmem_idx]};
-    end
-
-    // Host read (registered)
+    // Host read data
     logic [31:0] dmem_host_rdata;
-    always_ff @(posedge clk) begin
-        if (ren && is_dmem_host)
-            dmem_host_rdata <= {dmem_b3[host_dmem_idx], dmem_b2[host_dmem_idx],
-                               dmem_b1[host_dmem_idx], dmem_b0[host_dmem_idx]};
-    end
+
+    // Instantiate DMEM module
+    dmem #(
+        .DEPTH(8192),
+        .ADDR_WIDTH(13)
+    ) u_dmem (
+        .clk            (clk),
+        
+        // CPU port
+        .cpu_en         (cpu_running),
+        .cpu_addr       (cpu_dmem_idx),
+        .cpu_wdata      (cpu_dmem_wdata),
+        .cpu_we         (cpu_dmem_we && !host_dmem_wen),
+        .cpu_be         (cpu_dmem_be),
+        .cpu_rdata      (cpu_dmem_rdata),
+        .cpu_rdata_valid(cpu_dmem_rdata_valid),
+        
+        // Host port
+        .host_en        (is_dmem_host),
+        .host_addr      (host_dmem_idx),
+        .host_wdata     (wdata),
+        .host_we        (host_dmem_wen),
+        .host_rdata     (dmem_host_rdata)
+    );
 
     // Note: DMEM initialization removed for FPGA synthesis (exceeds 5000 iteration limit)
     // Block RAM initializes to 0 by default on Agilex
@@ -340,9 +316,11 @@ module riscv_soc (
     wire hazard_load_use_mem = mem_mem_read && mem_valid && (mem_rd != 5'd0) &&
                                ((mem_rd == id_rs1) || (mem_rd == id_rs2)) && id_valid;
 
-    // Load data wait: stall 1 cycle for Block RAM read latency
-    logic mem_load_wait;
-    wire hazard_load_data = mem_mem_read && mem_valid && mem_load_wait;
+    // Load data wait: stall 3 cycles for Block RAM read latency
+    // DMEM has 2-stage pipeline: address registered, then data read
+    // Need to stall while data propagates through the pipeline
+    logic [1:0] mem_load_wait;
+    wire hazard_load_data = mem_mem_read && mem_valid && (mem_load_wait != 2'd0);
 
     // Multiplier stall: stall 1 cycle for pipelined multiply
     logic mul_stall;
@@ -355,17 +333,18 @@ module riscv_soc (
     assign flush = mem_branch_taken;
 
     // Track when we need to wait for load data
-    // Set when a load enters MEM, cleared after 1 cycle
+    // Set to 3 when a load enters MEM, count down to 0
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
-            mem_load_wait <= 1'b0;
+            mem_load_wait <= 2'd0;
         end else if (cpu_running) begin
-            if (!hazard_load_data) begin
-                // New instruction entering MEM - set wait if it's a load
-                mem_load_wait <= ex2_mem_read && ex2_valid;
+            if (mem_load_wait == 2'd0) begin
+                // Not waiting - check if new load is entering MEM
+                if (ex2_mem_read && ex2_valid)
+                    mem_load_wait <= 2'd3;  // Stall for 3 cycles
             end else begin
-                // Currently waiting for load data - clear after 1 cycle
-                mem_load_wait <= 1'b0;
+                // Currently waiting - count down
+                mem_load_wait <= mem_load_wait - 2'd1;
             end
         end
     end
@@ -382,7 +361,7 @@ module riscv_soc (
     always_ff @(posedge clk) begin
         if (cpu_rst)
             if_pc <= 32'h0;
-        else if (cpu_running && !stall)
+        else if (cpu_running && (!stall || flush))  // Update on flush even during stall
             if_pc <= if_pc_next;
     end
 
@@ -481,8 +460,8 @@ module riscv_soc (
             ex1_lui       <= 1'b0;
             ex1_auipc     <= 1'b0;
             ex1_ebreak    <= 1'b0;
-        end else if (mul_stall || div_stall) begin
-            // During multiply/divide stall: hold current values (don't advance or invalidate)
+        end else if (mul_stall || div_stall || hazard_load_data) begin
+            // During multiply/divide/load-data stall: hold current values (don't advance or invalidate)
             // This preserves the instruction waiting in EX1
         end else if (stall) begin
             // During other stalls (load-use hazards): insert bubble
@@ -544,9 +523,9 @@ module riscv_soc (
     wire fwd_mem_rs1 = mem_reg_write && !mem_mem_read && (mem_rd != 5'd0) && (mem_rd == ex1_rs1) && !fwd_ex2_rs1;
     wire fwd_mem_rs2 = mem_reg_write && !mem_mem_read && (mem_rd != 5'd0) && (mem_rd == ex1_rs2) && !fwd_ex2_rs2;
 
-    // Forwarding from WB stage
-    wire fwd_wb_rs1  = wb_reg_write && !wb_mem_read && (wb_rd != 5'd0) && (wb_rd == ex1_rs1) && !fwd_ex2_rs1 && !fwd_mem_rs1;
-    wire fwd_wb_rs2  = wb_reg_write && !wb_mem_read && (wb_rd != 5'd0) && (wb_rd == ex1_rs2) && !fwd_ex2_rs2 && !fwd_mem_rs2;
+    // Forwarding from WB stage (now includes loads - data is in wb_rd_data)
+    wire fwd_wb_rs1  = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex1_rs1) && !fwd_ex2_rs1 && !fwd_mem_rs1;
+    wire fwd_wb_rs2  = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex1_rs2) && !fwd_ex2_rs2 && !fwd_mem_rs2;
 
     wire [31:0] ex1_fwd_rs1 = fwd_ex2_rs1 ? ex2_result :
                               fwd_mem_rs1 ? mem_alu_result :

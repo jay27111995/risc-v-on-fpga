@@ -44,7 +44,7 @@
 #include "verilated.h"
 
 // Uncomment for VCD tracing:
-// #define TRACE_VCD
+#define TRACE_VCD
 #ifdef TRACE_VCD
 #include "verilated_vcd_c.h"
 #endif
@@ -2041,6 +2041,294 @@ int main(int argc, char** argv) {
             printf("  Exact UART RX pattern test PASSED!\n");
         } else {
             printf("  ERROR: Exact UART RX pattern test FAILED!\n");
+            errors++;
+        }
+    }
+
+    // Test 45: Two-load + BEQ test (echo loop pattern)
+    // This tests: LW rd1, addr1; LW rd2, addr2; BEQ rd1, rd2, target
+    {
+        printf("\n=== Test 45: Two-load BEQ pattern ===\n");
+        tb.axi_write(0x00, 0x02);  // Reset
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // Test: load two equal values, branch if equal
+        // If branch works, x3 stays 0; if branch fails, x3 = 1
+        // NOTE: We add an ADDI x3, x0, 0 at the start to clear x3
+        uint32_t two_load_test[] = {
+            0x00000193,  // 0x00: ADDI x3, x0, 0    - clear x3 first!
+            0x10002703,  // 0x04: LW a4, 0x100(x0)  - load value1 to a4
+            0x10402783,  // 0x08: LW a5, 0x104(x0)  - load value2 to a5
+            0x00f70463,  // 0x0C: BEQ a4, a5, +8    - if equal, skip to 0x14
+            0x00100193,  // 0x10: ADDI x3, x0, 1    - x3 = 1 (shouldn't run if equal)
+            0x00302023,  // 0x14: SW x3, 0(x0)      - store result
+            0x00100073,  // 0x18: EBREAK
+        };
+
+        // Load as 64-bit pairs
+        printf("  Loading instructions:\n");
+        for (int i = 0; i < 7; i += 2) {
+            uint32_t even = two_load_test[i];
+            uint32_t odd = (i + 1 < 7) ? two_load_test[i + 1] : 0x00100073;
+            uint64_t pair = ((uint64_t)odd << 32) | even;
+            printf("    Write 0x%016lX to 0x%05X (insts %d,%d: 0x%08X, 0x%08X)\n", 
+                   pair, 0x20000 + i * 4, i, i+1, even, odd);
+            tb.axi_write(0x20000 + i * 4, pair);
+        }
+        for (int i = 0; i < 10; i++) tb.tick();
+        
+        // Verify IMEM content
+        printf("  Verifying IMEM:\n");
+        for (int i = 0; i < 7; i += 2) {
+            uint64_t readback = tb.axi_read(0x20000 + i * 4);
+            printf("    IMEM[%d,%d] = 0x%08lX, 0x%08lX (expected 0x%08X, 0x%08X)\n",
+                   i, i+1, (uint32_t)readback, (uint32_t)(readback >> 32),
+                   two_load_test[i], (i + 1 < 7) ? two_load_test[i+1] : 0x00100073);
+        }
+
+        // Set values equal (5 == 5)
+        tb.axi_write(0x80000, 0x0);      // result (should stay 0 if branch taken)
+        tb.axi_write(0x80100, 5);        // value1 = 5
+        tb.axi_write(0x80104, 5);        // value2 = 5 (equal!)
+        
+        // Verify DMEM before run
+        uint32_t pre_result = (uint32_t)tb.axi_read(0x80000);
+        uint32_t pre_val1 = (uint32_t)tb.axi_read(0x80100);
+        uint32_t pre_val2 = (uint32_t)tb.axi_read(0x80104);
+        printf("  Before run: result=0x%X, val1=%u, val2=%u\n", pre_result, pre_val1, pre_val2);
+        
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // Start CPU
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 200; i++) tb.tick();
+        tb.axi_write(0x00, 0x00);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        uint32_t result = (uint32_t)tb.axi_read(0x80000);
+        uint32_t pc = (uint32_t)tb.axi_read(0x10);
+        printf("  Equal case (5==5): result=%u (expected 0), PC=0x%02X\n", result, pc);
+        
+        // Now test not-equal case
+        tb.axi_write(0x00, 0x02);  // Reset
+        for (int i = 0; i < 10; i++) tb.tick();
+        
+        tb.axi_write(0x80000, 0xDEAD);  // result (should become 1)
+        tb.axi_write(0x80100, 5);       // value1 = 5
+        tb.axi_write(0x80104, 7);       // value2 = 7 (not equal!)
+        
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        tb.axi_write(0x00, 0x01);
+        for (int i = 0; i < 200; i++) tb.tick();
+        tb.axi_write(0x00, 0x00);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        uint32_t result2 = (uint32_t)tb.axi_read(0x80000);
+        uint32_t pc2 = (uint32_t)tb.axi_read(0x10);
+        printf("  Not-equal case (5!=7): result=%u (expected 1), PC=0x%02X\n", result2, pc2);
+        
+        if (result == 0 && result2 == 1) {
+            printf("  Two-load BEQ pattern test PASSED!\n");
+        } else {
+            printf("  Two-load BEQ pattern test FAILED!\n");
+            errors++;
+        }
+    }
+
+    // Test 46
+    {
+        printf("\n=== Test 46: Circular buffer UART (actual binary) ===\n");
+        tb.axi_write(0x00, 0x02);  // Reset
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // uart_test.bin compiled from:
+        //   uart_putc('H'); uart_putc('i'); uart_putc('!'); uart_putc('\n');
+        //   while(1) { c = uart_getc(); uart_putc(c); }
+        //
+        // Circular buffer addresses (from uart.h):
+        //   TX_BUF  = 0x100, TX_HEAD = 0x140, TX_TAIL = 0x144
+        //   RX_BUF  = 0x200, RX_HEAD = 0x240, RX_TAIL = 0x244
+        
+        // Use FULL original binary (with echo loop)
+        uint32_t uart_test_full[] = {
+            0x4bc00113, 0x0bc00293, 0x0bc00313, 0x0062d863, 0x0002a023,
+            0x00428293, 0xff5ff06f, 0x030000ef, 0x00100073, 0x0000006f,
+            0x14002683, 0x00168713, 0x00f77713, 0x14402783, 0xfee78ee3,
+            0x00269693, 0x10a6a023, 0x14e02023, 0x00008067, 0xff010113,
+            0x04800513, 0x00112623, 0xfd1ff0ef, 0x06900513, 0xfc9ff0ef,
+            0x02100513, 0xfc1ff0ef, 0x00a00513, 0xfb9ff0ef, 0x24402703,
+            0x24002783, 0xfef70ee3, 0x00170793, 0x00f7f793, 0x00271713,
+            0x20072603, 0x24f02223, 0x14002683, 0x00168713, 0x00f77713,
+            0x14402783, 0xfef70ee3, 0x00269693, 0x0ff67793, 0x10f6a023,
+            0x14e02023, 0xfbdff06f
+        };
+        int num_words = sizeof(uart_test_full) / 4;
+
+        // Load program as 64-bit pairs
+        for (int i = 0; i < num_words; i += 2) {
+            uint32_t even = uart_test_full[i];
+            uint32_t odd = (i + 1 < num_words) ? uart_test_full[i + 1] : 0x00100073;
+            uint64_t pair = ((uint64_t)odd << 32) | even;
+            tb.axi_write(0x20000 + i * 4, pair);
+        }
+        printf("  Loaded %d instructions\n", num_words);
+
+        // Clear circular buffer pointers only (not buffer contents)
+        tb.axi_write(0x80140, 0);  // TX_HEAD
+        for (int i = 0; i < 10; i++) tb.tick();
+        tb.axi_write(0x80144, 0);  // TX_TAIL
+        for (int i = 0; i < 10; i++) tb.tick();
+        tb.axi_write(0x80240, 0);  // RX_HEAD
+        for (int i = 0; i < 10; i++) tb.tick();
+        tb.axi_write(0x80244, 0);  // RX_TAIL
+        for (int i = 0; i < 10; i++) tb.tick();
+        
+        // Also clear TX_BUF to make sure we see fresh data
+        for (int i = 0; i < 8; i++) {
+            tb.axi_write(0x80100 + i * 4, 0xDEADBEEF);
+        }
+        
+        // Allow AXI writes to complete
+        for (int i = 0; i < 20; i++) tb.tick();
+        
+        // Verify pointers are zero
+        uint32_t th = (uint32_t)tb.axi_read(0x80140);
+        uint32_t tt = (uint32_t)tb.axi_read(0x80144);
+        uint32_t rh = (uint32_t)tb.axi_read(0x80240);
+        uint32_t rt = (uint32_t)tb.axi_read(0x80244);
+        printf("  Before start: TX_HEAD=%u TX_TAIL=%u RX_HEAD=%u RX_TAIL=%u\n", th, tt, rh, rt);
+        if (th != 0 || tt != 0 || rh != 0 || rt != 0) 
+            printf("  WARNING: Pointers not cleared!\n");
+
+        // Start CPU and run WITHOUT interruption
+        tb.axi_write(0x00, 0x01);
+        
+        // Run and periodically check TX_HEAD - also verify it's persisting
+        uint32_t last_head = 0;
+        for (int iter = 0; iter < 4; iter++) {
+            for (int i = 0; i < 500; i++) tb.tick();
+            uint32_t head = (uint32_t)tb.axi_read(0x80140);
+            uint32_t pc = (uint32_t)tb.axi_read(0x10);
+            printf("  After %d cycles: TX_HEAD=%u, PC=0x%03X\n", (iter+1)*500, head, pc);
+            
+            // Double-check the read is correct
+            if (head < last_head && head != 0) {
+                printf("  WARNING: TX_HEAD decreased from %u to %u!\n", last_head, head);
+            }
+            last_head = head;
+        }
+        
+        // Read TX_HEAD multiple times to check consistency
+        printf("  TX_HEAD consistency check: ");
+        for (int i = 0; i < 5; i++) {
+            uint32_t h = (uint32_t)tb.axi_read(0x80140);
+            printf("%u ", h);
+        }
+        printf("\n");
+        
+        // DON'T stop CPU - let it keep running while we check!
+        // Just read the TX buffer without stopping
+        for (int i = 0; i < 50; i++) tb.tick();
+        
+        uint32_t pc = (uint32_t)tb.axi_read(0x10);  // PC at control register 0x10
+        printf("  After 500 cycles: PC=0x%03X\n", pc);
+
+        // Check TX buffer (CPU is still running in getc loop)
+        uint32_t tx_head = (uint32_t)tb.axi_read(0x80140);
+        uint32_t tx_tail = (uint32_t)tb.axi_read(0x80144);
+        printf("  TX_HEAD=%u TX_TAIL=%u\n", tx_head, tx_tail);
+
+        // Debug: dump TX_BUF area
+        printf("  TX_BUF dump:\n");
+        for (int i = 0; i < 8; i++) {
+            uint32_t val = (uint32_t)tb.axi_read(0x80100 + i * 4);
+            printf("    [%d] = 0x%08X\n", i, val);
+        }
+
+        // Read chars from TX buffer
+        printf("  TX buffer: ");
+        char tx_chars[16];
+        int tx_count = 0;
+        uint32_t tx_tail_read = tx_tail;
+        while (tx_tail_read != tx_head && tx_count < 16) {
+            uint32_t word = (uint32_t)tb.axi_read(0x80100 + tx_tail_read * 4);
+            tx_chars[tx_count++] = word & 0xFF;
+            tx_tail_read = (tx_tail_read + 1) & 15;
+        }
+        for (int i = 0; i < tx_count; i++) {
+            char c = tx_chars[i];
+            if (c >= 32 && c <= 126) printf("%c", c);
+            else printf("\\x%02X", (unsigned char)c);
+        }
+        printf("\n");
+
+        // Check: should have sent 'H', 'i', '!', '\n'
+        if (tx_count == 4 && tx_chars[0] == 'H' && tx_chars[1] == 'i' && 
+            tx_chars[2] == '!' && tx_chars[3] == '\n') {
+            printf("  TX test PASSED!\n");
+        } else {
+            printf("  TX test FAILED!\n");
+            errors++;
+        }
+
+        // Now test RX: send 'X' to CPU (CPU is still running!)
+        printf("  Sending 'X' to CPU...\n");
+        
+        // Debug: check state BEFORE writing RX data
+        uint32_t rx_tail_before = (uint32_t)tb.axi_read(0x80244);
+        uint32_t pc_before = (uint32_t)tb.axi_read(0x10);
+        printf("  Before RX setup: RX_TAIL=%u PC=0x%03X\n", rx_tail_before, pc_before);
+        
+        tb.axi_write(0x80200, 'X');  // RX_BUF[0] = 'X'
+        for (int i = 0; i < 10; i++) tb.tick();
+        tb.axi_write(0x80240, 1);    // RX_HEAD = 1
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // Update TX_TAIL so CPU knows we consumed the greeting
+        tb.axi_write(0x80144, tx_head);
+        for (int i = 0; i < 10; i++) tb.tick();
+
+        // NO RESTART NEEDED - CPU never stopped!
+
+        // Debug: check what CPU sees
+        uint32_t rx_head_chk = (uint32_t)tb.axi_read(0x80240);
+        uint32_t rx_tail_chk = (uint32_t)tb.axi_read(0x80244);
+        uint32_t rx_buf0 = (uint32_t)tb.axi_read(0x80200);
+        uint32_t pc_chk = (uint32_t)tb.axi_read(0x10);
+        printf("  Debug after RX setup: RX_HEAD=%u RX_TAIL=%u RX_BUF[0]=0x%02X PC=0x%03X\n", 
+               rx_head_chk, rx_tail_chk, rx_buf0 & 0xFF, pc_chk);
+
+        // Let CPU process without any AXI activity
+        for (int i = 0; i < 5000; i++) tb.tick();
+        
+        // Check results
+        uint32_t rx_tail_after = (uint32_t)tb.axi_read(0x80244);
+        pc_chk = (uint32_t)tb.axi_read(0x10);
+        printf("  Debug after 5000 cycles: PC=0x%03X RX_TAIL=%u\n", pc_chk, rx_tail_after);
+
+        // Check if CPU echoed 'X' back
+        uint32_t tx_head2 = (uint32_t)tb.axi_read(0x80140);
+        printf("  TX_HEAD after RX: %u (was %u)\n", tx_head2, tx_head);
+        
+        // Dump TX_BUF to see what was echoed
+        printf("  TX_BUF after echo:\n");
+        for (uint32_t i = tx_head; i < tx_head2 && i < 16; i++) {
+            uint32_t val = (uint32_t)tb.axi_read(0x80100 + (i % 16) * 4);
+            printf("    [%u] = 0x%02X '%c'\n", i, val & 0xFF, (val & 0xFF) >= 32 ? val & 0xFF : '?');
+        }
+        
+        if (tx_head2 > tx_head) {
+            uint32_t echo = (uint32_t)tb.axi_read(0x80100 + tx_head * 4);
+            printf("  Echoed char: '%c' (0x%02X)\n", echo & 0xFF, echo & 0xFF);
+            if ((echo & 0xFF) == 'X') {
+                printf("  RX/echo test PASSED!\n");
+            } else {
+                printf("  RX/echo test FAILED (wrong char)!\n");
+                errors++;
+            }
+        } else {
+            printf("  RX/echo test FAILED (no echo)!\n");
             errors++;
         }
     }
