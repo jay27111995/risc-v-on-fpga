@@ -1,21 +1,34 @@
 #include "uart.h"
 
+// Print string from inline chars (no .rodata)
+void print_str(const char *s) {
+    while (*s) putchar(*s++);
+}
+
 int main() {
     int a, b;
     
-    // Hello World
-    puts("Hello, RISC-V World!");
-    puts("");
+    // Hello World - inline
+    putchar('H'); putchar('e'); putchar('l'); putchar('l'); putchar('o');
+    putchar(','); putchar(' ');
+    putchar('R'); putchar('I'); putchar('S'); putchar('C'); putchar('-'); putchar('V');
+    putchar('!'); putchar('\n');
     
-    // Sum of two numbers using scanf
-    printf("Enter two numbers: ");
-    scanf("%d %d", &a, &b);
+    // Prompt
+    putchar('a'); putchar('=');
+    a = read_int();
     
-    int sum = a + b;
+    putchar('\n'); putchar('b'); putchar('=');
+    b = read_int();
     
-    printf("\n%d + %d = %d\n", a, b, sum);
-    
-    puts("\nDone!");
+    // Result
+    putchar('\n');
+    print_int(a);
+    putchar('+');
+    print_int(b);
+    putchar('=');
+    print_int(a + b);
+    putchar('\n');
     
     return 0;
 }
