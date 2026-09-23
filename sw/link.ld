@@ -4,26 +4,27 @@
  *   IMEM: 0x00000000+ - instruction fetch only (128KB)
  *   DMEM: 0x00000000+ - data load/store only (32KB)
  *
- * The ELF loader will:
- *   - Put .text sections in IMEM
- *   - Put .rodata/.data/.bss sections in DMEM
+ * Binary Layout (LMA - what goes in the .elf/.bin file):
+ *   0x00000000: .text (code)
+ *   After .text: .rodata, .data (to be loaded to DMEM by elf_loader)
  *
- * DMEM layout:
- *   0x000-0x0FF: Reserved (general purpose)
- *   0x100-0x13F: TX_BUF (16 words)
- *   0x140:       TX_HEAD
- *   0x144:       TX_TAIL
- *   0x148-0x1FF: Reserved
- *   0x200-0x23F: RX_BUF (16 words)
- *   0x240:       RX_HEAD
- *   0x244:       RX_TAIL
- *   0x248-0x3FF: Reserved
- *   0x400+:      Program data (.rodata, .data, .bss, stack)
+ * Runtime Layout (VMA - where CPU sees things):
+ *   IMEM[0x00000000]: .text (fetched as instructions)
+ *   DMEM[0x00000400]: .rodata, .data, .bss (accessed as data)
+ *
+ * DMEM reserved areas:
+ *   0x100-0x13F: TX_BUF
+ *   0x140-0x147: TX_HEAD, TX_TAIL
+ *   0x200-0x23F: RX_BUF  
+ *   0x240-0x247: RX_HEAD, RX_TAIL
  */
 
 MEMORY
 {
+    /* For code - LMA and VMA both at 0 */
     IMEM (rx)  : ORIGIN = 0x00000000, LENGTH = 128K
+    
+    /* For data - VMA at 0x400, LMA follows .text in file */
     DMEM (rw)  : ORIGIN = 0x00000400, LENGTH = 31K
 }
 
@@ -31,31 +32,36 @@ ENTRY(_boot)
 
 SECTIONS
 {
-    /* Code - goes to IMEM (executable) */
+    /* Code - VMA=0, LMA=0 (executed from IMEM) */
     .text : {
         *(.text.boot)
         *(.text.init)
         *(.text._start)
         *(.text*)
-    } > IMEM
-
-    /* Read-only data - goes to DMEM (not executable) */
-    .rodata : {
         . = ALIGN(4);
+        __text_end = .;
+    } > IMEM
+    
+    /* Read-only data - VMA=0x400+, LMA after .text */
+    /* The elf_loader will put this in DMEM at VMA address */
+    .rodata : {
+        __rodata_start = .;
         *(.rodata*)
         *(.srodata*)
         . = ALIGN(4);
+        __rodata_end = .;
     } > DMEM
 
     /* Initialized data */
     .data : {
-        . = ALIGN(4);
+        __data_start = .;
         *(.data*)
         *(.sdata*)
         . = ALIGN(4);
+        __data_end = .;
     } > DMEM
 
-    /* BSS - uninitialized data */
+    /* BSS - uninitialized data (zeroed by startup) */
     .bss : {
         . = ALIGN(4);
         __bss_start = .;
@@ -66,7 +72,7 @@ SECTIONS
         __bss_end = .;
     } > DMEM
 
-    /* Stack */
+    /* Stack at end of DMEM */
     .stack (NOLOAD) : {
         . = ALIGN(16);
         . = . + 0x800;
