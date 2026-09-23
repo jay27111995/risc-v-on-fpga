@@ -1,7 +1,9 @@
 #include "uart.h"
 
 int main() {
-    // Short test - less than 16 chars
-    print("Hi!");  // 3 chars, no newline
+    // Inline characters to avoid .rodata section
+    putchar('H');
+    putchar('i');
+    putchar('!');
     return 0;
 }
