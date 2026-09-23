@@ -1,27 +1,23 @@
 /* Linker script for RISC-V SoC with separate IMEM/DMEM
  * 
- * IMEM and DMEM are physically separate memories, both addressed from 0.
- * - Instruction fetch goes to IMEM
- * - Data load/store goes to DMEM
+ * IMEM and DMEM are physically separate memories.
+ * To avoid linker VMA overlap complaints, we use different address ranges:
+ *   IMEM VMA: 0x00000000+ (code)
+ *   DMEM VMA: 0x10000000+ (data) - CPU hardware ignores upper bits
  *
- * Binary Layout:
- *   [0x0000 - text_end]:  .text (goes to IMEM)
- *   [text_end - ...]:     .rodata, .data (goes to DMEM at VMA 0x400+)
- *
- * The elf_loader parses sections and routes them correctly.
+ * The actual hardware only uses lower bits of address for DMEM indexing.
  */
 
 MEMORY
 {
     IMEM (rx)  : ORIGIN = 0x00000000, LENGTH = 128K
-    DMEM (rw)  : ORIGIN = 0x00000400, LENGTH = 31K
+    DMEM (rw)  : ORIGIN = 0x10000400, LENGTH = 31K
 }
 
 ENTRY(_boot)
 
 SECTIONS
 {
-    /* Code - in IMEM */
     .text : {
         *(.text.boot)
         *(.text.init) 
@@ -32,7 +28,6 @@ SECTIONS
     
     __text_end = .;
 
-    /* Data sections - VMA in DMEM, LMA after .text */
     .rodata : AT(__text_end) {
         __rodata_start = .;
         *(.rodata*)
