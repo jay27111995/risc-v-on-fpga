@@ -2,13 +2,15 @@
 #define UART_H
 
 // UART circular buffer addresses
-// Each buffer entry is a 32-bit word, char in low byte
-#define TX_BUF    ((volatile int*)0x100)
-#define TX_HEAD   ((volatile int*)0x140)
-#define TX_TAIL   ((volatile int*)0x144)
-#define RX_BUF    ((volatile int*)0x200)
-#define RX_HEAD   ((volatile int*)0x240)
-#define RX_TAIL   ((volatile int*)0x244)
+// DMEM is mapped at 0x10000000 to avoid linker overlap with IMEM
+// The hardware only uses lower bits, so 0x10000xxx maps to DMEM[xxx]
+#define DMEM_BASE     0x10000000
+#define TX_BUF    ((volatile int*)(DMEM_BASE + 0x100))
+#define TX_HEAD   ((volatile int*)(DMEM_BASE + 0x140))
+#define TX_TAIL   ((volatile int*)(DMEM_BASE + 0x144))
+#define RX_BUF    ((volatile int*)(DMEM_BASE + 0x200))
+#define RX_HEAD   ((volatile int*)(DMEM_BASE + 0x240))
+#define RX_TAIL   ((volatile int*)(DMEM_BASE + 0x244))
 
 // Send one character
 static inline void putchar(char c) {
