@@ -24,6 +24,9 @@ gcc $CFLAGS $LIBS $OUT/riscv_host.o -o $OUT/riscv_host
 gcc $CFLAGS -c $SRC/loader.c -o $OUT/loader.o
 gcc $CFLAGS $LIBS $OUT/loader.o -o $OUT/loader
 
+gcc $CFLAGS -Wno-unused-result -c $SRC/elf_loader.c -o $OUT/elf_loader.o
+gcc $CFLAGS $LIBS $OUT/elf_loader.o -o $OUT/elf_loader
+
 gcc $CFLAGS -c $SRC/test_sniffer.c -o $OUT/test_sniffer.o
 gcc $CFLAGS $LIBS $OUT/test_sniffer.o -o $OUT/test_sniffer
 
