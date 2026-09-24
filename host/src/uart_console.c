@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
         if (tx_tail != tx_head) {
             unsigned int word = read_dmem(TX_BUF + tx_tail);
             char c = word & 0xFF;
-            printf("[%c]", c);
+            putchar(c); fflush(stdout);
             fflush(stdout);
             tx_tail = (tx_tail + 1) & BUF_MASK;
             write_dmem(TX_TAIL, tx_tail);
