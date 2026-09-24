@@ -3,7 +3,6 @@ obj_dir/
 *.o
 *.a
 build/
-*.sof
 *.qws
 db/
 incremental_db/
@@ -11,4 +10,3 @@ output_files/
 
 # Host binaries
 host/bin/
-*.sof
