@@ -1,4 +1,4 @@
-#include "uart.h"
+#include <stdio.h>
 
 int main() {
     int a, b;
