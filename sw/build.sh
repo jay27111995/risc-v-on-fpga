@@ -13,7 +13,7 @@ LDFLAGS="-T link.ld -nostdlib"
 
 if [ $# -lt 1 ]; then
     echo "Usage: $0 <source.c>"
-    echo "Example: $0 factorial.c"
+    echo "Example: $0 hello_sum.c"
     exit 1
 fi
 
@@ -30,17 +30,9 @@ ${CROSS}gcc $CFLAGS -c start.S -o start.o
 echo "Compiling..."
 ${CROSS}gcc $CFLAGS -c "$SRC" -o "${NAME}.o"
 
-# Link (startup first!)
+# Link
 echo "Linking..."
 ${CROSS}gcc $CFLAGS $LDFLAGS start.o "${NAME}.o" -o "${NAME}.elf"
-
-# Generate binary
-echo "Generating binary..."
-${CROSS}objcopy -O binary "${NAME}.elf" "${NAME}.bin"
-
-# Generate hex for loading
-echo "Generating hex..."
-${CROSS}objcopy -O verilog "${NAME}.elf" "${NAME}.hex"
 
 # Disassemble for debugging
 echo "Disassembling..."
@@ -51,20 +43,12 @@ echo ""
 echo "=== Size ==="
 ${CROSS}size "${NAME}.elf"
 
-# Show first few instructions
-echo ""
-echo "=== First 20 instructions ==="
-head -40 "${NAME}.dis" | tail -30
-
 echo ""
 echo "=== Build complete ==="
-echo "  ELF:  ${NAME}.elf"
-echo "  BIN:  ${NAME}.bin"
-echo "  HEX:  ${NAME}.hex"
-echo "  DIS:  ${NAME}.dis"
+echo "  ELF: ${NAME}.elf"
+echo "  DIS: ${NAME}.dis"
 echo ""
-echo "=== Next Steps ==="
-echo "  1. Load the binary:    sudo ../host/bin/loader ${NAME}.bin \$PCIE_EP \$GRP"
-echo "  2. Run UART console:   sudo ../host/bin/uart_console \$PCIE_EP \$GRP"
-echo ""
-echo "  NOTE: You MUST run loader before uart_console to initialize memory!"
+echo "=== To Run ==="
+echo "  cd ~/risc-v-on-fpga"
+echo "  sudo host/bin/elf_loader sw/${NAME}.elf 0000:b1:00.0 12"
+echo "  sudo host/bin/uart_console 0000:b1:00.0 12"
