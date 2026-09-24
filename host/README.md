@@ -1,67 +1,61 @@
-# RISC-V Host Tools
+# Host Tools
 
-Host-side programs for interacting with the RISC-V SoC over PCIe.
+Tools that run on the host PC to interact with the FPGA over PCIe.
 
 ## Building
 
 ```bash
-bash build.sh
+./build.sh
 ```
 
-## Programs
+## Tools
 
-### loader
-
-Load a binary to IMEM:
+### elf_loader
+Loads an ELF file to the FPGA, routing sections to correct memories.
 
 ```bash
-sudo ./bin/loader <program.bin> <pci_addr> <iommu_group>
-sudo ./bin/loader --no-run <program.bin> <pci_addr> <iommu_group>
+sudo ./bin/elf_loader <program.elf> <pci_addr> <iommu_group>
+sudo ./bin/elf_loader ../sw/build/hello_sum.elf 0000:b1:00.0 12
 ```
 
-Use `--no-run` for UART programs (let uart_console start the CPU).
+- `.text` (code) → IMEM
+- `.rodata`, `.data`, `.bss` → DMEM
 
 ### uart_console
-
-Virtual UART terminal:
+Interactive UART terminal over PCIe.
 
 ```bash
 sudo ./bin/uart_console <pci_addr> <iommu_group>
+sudo ./bin/uart_console 0000:b1:00.0 12
 ```
 
-- Starts the CPU
-- Shows CPU output (TX)
-- Sends keyboard input to CPU (RX)
-- Ctrl-C to exit
+Ctrl-C to exit.
 
 ### Other Tools
+- `loader` - Old binary loader (IMEM only)
+- `riscv_host` - Instruction tests
+- `test_sniffer` - Bus sniffer debug
+- `test_logger` - CPU logger debug
 
-- `riscv_host` - RV32I instruction tests
-- `test_logger` - CPU logger test
-- `test_sniffer` - Bus sniffer test
-- `test_programs` - Run sum.c/factorial.c
-
-## Typical Usage
-
-```bash
-# Set environment
-export PCIE_EP=0000:b1:00.0
-export GRP=12
-
-# Load and run UART program
-sudo ./bin/loader --no-run ../sw/uart_test.bin $PCIE_EP $GRP
-sudo ./bin/uart_console $PCIE_EP $GRP
-
-# Load and run non-UART program
-sudo ./bin/loader ../sw/sum.bin $PCIE_EP $GRP 100
-```
-
-## VFIO Setup
+## PCIe Setup
 
 ```bash
-PCI=0000:b1:00.0
-echo $PCI | sudo tee /sys/bus/pci/devices/$PCI/driver/unbind 2>/dev/null
-echo vfio-pci | sudo tee /sys/bus/pci/devices/$PCI/driver_override
-echo $PCI | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
-GRP=$(basename $(readlink /sys/bus/pci/devices/$PCI/iommu_group))
+PCIE_EP=0000:b1:00.0
+GRP=12
+
+# Bind to VFIO
+echo ${PCIE_EP} | sudo tee /sys/bus/pci/devices/${PCIE_EP}/driver/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/${PCIE_EP}/driver_override
+echo ${PCIE_EP} | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
 ```
+
+## UART Memory Map
+
+| DMEM Offset | Description |
+|-------------|-------------|
+| 0x100-0x13F | TX buffer (16 words) |
+| 0x140 | TX_HEAD |
+| 0x144 | TX_TAIL |
+| 0x200-0x23F | RX buffer (16 words) |
+| 0x240 | RX_HEAD |
+| 0x244 | RX_TAIL |
