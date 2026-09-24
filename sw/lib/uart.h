@@ -117,3 +117,17 @@ static int scanf(const char *fmt, ...) {
 }
 
 #endif
+
+// Non-blocking key check - returns 1 if key available, 0 if not
+static inline int kbhit(void) {
+    return *RX_TAIL != *RX_HEAD;
+}
+
+// Non-blocking getchar - returns -1 if no key
+static inline int getchar_nb(void) {
+    int tail = *RX_TAIL;
+    if (tail == *RX_HEAD) return -1;
+    char c = (char)RX_BUF[tail];
+    *RX_TAIL = (tail + 1) & 0xF;
+    return c;
+}
