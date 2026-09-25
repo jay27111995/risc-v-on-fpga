@@ -42,7 +42,7 @@ sudo host/bin/uart_console 0000:b1:00.0 12
 | Clock | 250 MHz |
 | IMEM | 128 KB |
 | DMEM | 32 KB |
-| Target | Intel Agilex 7 (AGF014) |
+| Target | Intel Agilex 7 (AGIB027R29A1E1VB) |
 | Interface | PCIe Gen3 x4 |
 
 ## License
