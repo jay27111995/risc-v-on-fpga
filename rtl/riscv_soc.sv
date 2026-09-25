@@ -330,7 +330,9 @@ module riscv_soc (
 
     assign stall = hazard_load_use_ex1 || hazard_load_use_ex2 || hazard_load_use_mem ||
                    hazard_load_data || mul_stall || div_stall;
-    assign flush = mem_branch_taken;
+    // Note: interrupt_flush is defined near PC logic and combined here
+    wire flush_base = mem_branch_taken;
+    // flush will be redefined below after interrupt_flush is computed
 
     // Track when we need to wait for load data
     // Set to 3 when a load enters MEM, count down to 0
@@ -355,13 +357,26 @@ module riscv_soc (
 
     logic [31:0] if_pc;
     logic [31:0] if_instr;
-
-    wire [31:0] if_pc_next = mem_branch_taken ? mem_branch_target : (if_pc + 32'd4);
+    
+    // Determine which PC to save for interrupt (use ID stage PC as the "next" instruction)
+    assign interrupt_pc = id_pc;
+    
+    // PC next selection: interrupt > MRET > branch/jump > sequential
+    wire [31:0] if_pc_next = interrupt_taken ? csr_mtvec :
+                             (id_valid && is_mret) ? csr_mepc :
+                             mem_branch_taken ? mem_branch_target : 
+                             (if_pc + 32'd4);
+    
+    // Flush pipeline when taking interrupt or executing MRET
+    wire interrupt_flush = interrupt_taken || (id_valid && is_mret);
+    
+    // Combined flush signal
+    assign flush = flush_base || interrupt_flush;
 
     always_ff @(posedge clk) begin
         if (cpu_rst)
             if_pc <= 32'h0;
-        else if (cpu_running && (!stall || flush))  // Update on flush even during stall
+        else if (cpu_running && (!stall || flush))
             if_pc <= if_pc_next;
     end
 
@@ -400,6 +415,12 @@ module riscv_soc (
     logic        id_ebreak;
     logic [2:0]  id_mem_op;
 
+    // CSR signals from decoder
+    logic        id_csr_en;
+    logic [1:0]  id_csr_op;
+    logic        id_csr_imm;
+    logic [11:0] id_csr_addr;
+
     decoder decoder_inst (
         .instr     (id_instr),
         .rs1       (id_rs1),
@@ -418,7 +439,11 @@ module riscv_soc (
         .jump_reg  (id_jump_reg),
         .lui       (id_lui),
         .auipc     (id_auipc),
-        .ebreak    (id_ebreak)
+        .ebreak    (id_ebreak),
+        .csr_en    (id_csr_en),
+        .csr_op    (id_csr_op),
+        .csr_imm   (id_csr_imm),
+        .csr_addr  (id_csr_addr)
     );
 
     logic [31:0] id_rs1_data, id_rs2_data;
@@ -435,6 +460,42 @@ module riscv_soc (
     );
 
     // =========================================================================
+    // CSR Registers and Timer
+    // =========================================================================
+    
+    // CSR addresses
+    localparam CSR_MSTATUS = 12'h300;
+    localparam CSR_MIE     = 12'h304;
+    localparam CSR_MTVEC   = 12'h305;
+    localparam CSR_MEPC    = 12'h341;
+    localparam CSR_MCAUSE  = 12'h342;
+    localparam CSR_MTVAL   = 12'h343;
+    localparam CSR_MIP     = 12'h344;
+    
+    // CSR registers
+    logic [31:0] csr_mstatus;  // Machine status
+    logic [31:0] csr_mie;      // Machine interrupt enable
+    logic [31:0] csr_mtvec;    // Machine trap vector
+    logic [31:0] csr_mepc;     // Machine exception PC
+    logic [31:0] csr_mcause;   // Machine cause
+    logic [31:0] csr_mtval;    // Machine trap value
+    logic [31:0] csr_mip;      // Machine interrupt pending
+    
+    // Timer registers (64-bit)
+    logic [63:0] mtime;        // Timer counter
+    logic [63:0] mtimecmp;     // Timer compare
+    
+    // Timer interrupt
+    wire timer_interrupt = (mtime >= mtimecmp) && csr_mie[7] && csr_mstatus[3];
+    
+    // Interrupt taken flag - set when we take an interrupt
+    logic interrupt_taken;
+    logic [31:0] interrupt_pc;  // PC to save when taking interrupt
+    
+    // MRET instruction detection
+    wire is_mret = (id_instr == 32'h30200073);  // MRET opcode (in ID stage)
+
+    // =========================================================================
     // ID/EX1 Pipeline Register
     // =========================================================================
 
@@ -448,6 +509,11 @@ module riscv_soc (
     logic        ex1_lui, ex1_auipc;
     logic        ex1_ebreak;
     logic [2:0]  ex1_mem_op;
+    logic        ex1_csr_en;
+    logic [1:0]  ex1_csr_op;
+    logic        ex1_csr_imm;
+    logic [11:0] ex1_csr_addr;
+    logic        ex1_mret;  // MRET instruction
 
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -460,6 +526,8 @@ module riscv_soc (
             ex1_lui       <= 1'b0;
             ex1_auipc     <= 1'b0;
             ex1_ebreak    <= 1'b0;
+            ex1_csr_en    <= 1'b0;
+            ex1_mret      <= 1'b0;
         end else if (mul_stall || div_stall || hazard_load_data) begin
             // During multiply/divide/load-data stall: hold current values (don't advance or invalidate)
             // This preserves the instruction waiting in EX1
@@ -474,6 +542,8 @@ module riscv_soc (
             ex1_lui       <= 1'b0;
             ex1_auipc     <= 1'b0;
             ex1_ebreak    <= 1'b0;
+            ex1_csr_en    <= 1'b0;
+            ex1_mret      <= 1'b0;
         end else if (cpu_running) begin
             ex1_pc        <= id_pc;
             ex1_rs1_data  <= id_rs1_data;
@@ -495,6 +565,11 @@ module riscv_soc (
             ex1_lui       <= id_lui       && id_valid;
             ex1_auipc     <= id_auipc     && id_valid;
             ex1_ebreak    <= id_ebreak    && id_valid;
+            ex1_csr_en    <= id_csr_en    && id_valid;
+            ex1_csr_op    <= id_csr_op;
+            ex1_csr_imm   <= id_csr_imm;
+            ex1_csr_addr  <= id_csr_addr;
+            ex1_mret      <= is_mret      && id_valid;
             ex1_valid     <= id_valid;
         end
     end
@@ -553,6 +628,12 @@ module riscv_soc (
     logic        ex2_lui, ex2_auipc;
     logic        ex2_ebreak;
     logic [2:0]  ex2_mem_op;
+    logic        ex2_csr_en;
+    logic [1:0]  ex2_csr_op;
+    logic        ex2_csr_imm;
+    logic [11:0] ex2_csr_addr;
+    logic [31:0] ex2_csr_wdata;  // Data to write to CSR
+    logic        ex2_mret;       // MRET instruction
 
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -565,6 +646,8 @@ module riscv_soc (
             ex2_lui       <= 1'b0;
             ex2_auipc     <= 1'b0;
             ex2_ebreak    <= 1'b0;
+            ex2_csr_en    <= 1'b0;
+            ex2_mret      <= 1'b0;
         end else if (cpu_running && !hazard_load_data && !mul_stall && !div_stall) begin
             ex2_pc        <= ex1_pc;
             ex2_alu_a     <= ex1_fwd_rs1;
@@ -584,6 +667,13 @@ module riscv_soc (
             ex2_lui       <= ex1_lui;
             ex2_auipc     <= ex1_auipc;
             ex2_ebreak    <= ex1_ebreak;
+            ex2_csr_en    <= ex1_csr_en;
+            ex2_csr_op    <= ex1_csr_op;
+            ex2_csr_imm   <= ex1_csr_imm;
+            ex2_csr_addr  <= ex1_csr_addr;
+            ex2_mret      <= ex1_mret;
+            // CSR write data: use immediate or rs1 (with forwarding)
+            ex2_csr_wdata <= ex1_csr_imm ? ex1_imm : ex1_fwd_rs1;
             ex2_valid     <= ex1_valid;
         end
     end
@@ -710,8 +800,48 @@ module riscv_soc (
     // LUI/AUIPC result: imm for LUI, PC+imm for AUIPC
     wire [31:0] ex2_lui_auipc_result = ex2_auipc ? (ex2_pc + ex2_imm) : ex2_imm;
 
-    // Select between ALU result and LUI/AUIPC result
-    assign ex2_result = (ex2_lui || ex2_auipc) ? ex2_lui_auipc_result : ex2_alu_result;
+    // =========================================================================
+    // CSR Read Logic (in EX2 stage)
+    // =========================================================================
+    
+    logic [31:0] ex2_csr_rdata;  // Data read from CSR
+    
+    // CSR forwarding: if MEM stage is writing to the same CSR we're reading, use the new value
+    wire csr_fwd_from_mem = mem_valid && mem_csr_en && (mem_csr_addr == ex2_csr_addr);
+    
+    // Calculate what MEM stage will write (same logic as in the CSR write block)
+    logic [31:0] mem_csr_fwd_val;
+    always_comb begin
+        case (mem_csr_op)
+            2'b00: mem_csr_fwd_val = mem_csr_wdata;                       // CSRRW
+            2'b01: mem_csr_fwd_val = mem_csr_rdata | mem_csr_wdata;       // CSRRS
+            2'b10: mem_csr_fwd_val = mem_csr_rdata & ~mem_csr_wdata;      // CSRRC
+            default: mem_csr_fwd_val = mem_csr_wdata;
+        endcase
+    end
+    
+    always_comb begin
+        if (csr_fwd_from_mem) begin
+            // Forward from MEM stage
+            ex2_csr_rdata = mem_csr_fwd_val;
+        end else begin
+            // Read from CSR register
+            case (ex2_csr_addr)
+                CSR_MSTATUS: ex2_csr_rdata = csr_mstatus;
+                CSR_MIE:     ex2_csr_rdata = csr_mie;
+                CSR_MTVEC:   ex2_csr_rdata = csr_mtvec;
+                CSR_MEPC:    ex2_csr_rdata = csr_mepc;
+                CSR_MCAUSE:  ex2_csr_rdata = csr_mcause;
+                CSR_MTVAL:   ex2_csr_rdata = csr_mtval;
+                CSR_MIP:     ex2_csr_rdata = csr_mip;
+                default:     ex2_csr_rdata = 32'b0;
+            endcase
+        end
+    end
+
+    // Select between ALU result, LUI/AUIPC result, or CSR read
+    assign ex2_result = ex2_csr_en ? ex2_csr_rdata :
+                        (ex2_lui || ex2_auipc) ? ex2_lui_auipc_result : ex2_alu_result;
 
     // =========================================================================
     // EX2/MEM Pipeline Register
@@ -727,6 +857,12 @@ module riscv_soc (
     logic        mem_jump, mem_jump_reg;
     logic        mem_ebreak;
     logic [2:0]  mem_mem_op;
+    logic        mem_csr_en;
+    logic [1:0]  mem_csr_op;
+    logic [11:0] mem_csr_addr;
+    logic [31:0] mem_csr_wdata;
+    logic [31:0] mem_csr_rdata;
+    logic        mem_mret;
 
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -737,6 +873,8 @@ module riscv_soc (
             mem_branch    <= 1'b0;
             mem_jump      <= 1'b0;
             mem_ebreak    <= 1'b0;
+            mem_csr_en    <= 1'b0;
+            mem_mret      <= 1'b0;
         end else if (cpu_running && !hazard_load_data && !mul_stall && !div_stall) begin
             // Normal advance from EX2 to MEM
             mem_alu_result <= ex2_result;
@@ -756,6 +894,12 @@ module riscv_soc (
             mem_pc         <= ex2_pc;
             mem_imm        <= ex2_imm;
             mem_ebreak     <= ex2_ebreak;
+            mem_csr_en     <= ex2_csr_en;
+            mem_csr_op     <= ex2_csr_op;
+            mem_csr_addr   <= ex2_csr_addr;
+            mem_csr_wdata  <= ex2_csr_wdata;
+            mem_csr_rdata  <= ex2_csr_rdata;
+            mem_mret       <= ex2_mret;
             mem_valid      <= ex2_valid;
         end
         // When hazard_load_data, mul_stall, or div_stall: MEM stage holds
@@ -840,7 +984,28 @@ module riscv_soc (
     // Load data selection and sign extension
     // Load data selection moved to WB stage for better timing
     // Pass raw DMEM data through MEM/WB register
-    wire [31:0] mem_load_data_raw = cpu_dmem_rdata;
+    
+    // Timer memory-mapped addresses (relative to DMEM base)
+    // 0x1000: MTIME[31:0]   (read-only)
+    // 0x1004: MTIME[63:32]  (read-only)
+    // 0x1008: MTIMECMP[31:0]
+    // 0x100C: MTIMECMP[63:32]
+    wire is_timer_addr = (cpu_dmem_addr[15:4] == 12'h100);  // 0x1000-0x100F
+    
+    // Timer read mux
+    logic [31:0] timer_rdata;
+    always_comb begin
+        case (cpu_dmem_addr[3:2])
+            2'b00: timer_rdata = mtime[31:0];      // 0x1000: MTIME_LO
+            2'b01: timer_rdata = mtime[63:32];     // 0x1004: MTIME_HI
+            2'b10: timer_rdata = mtimecmp[31:0];   // 0x1008: MTIMECMP_LO
+            2'b11: timer_rdata = mtimecmp[63:32];  // 0x100C: MTIMECMP_HI
+            default: timer_rdata = 32'b0;
+        endcase
+    end
+    
+    // Select between DMEM and timer reads
+    wire [31:0] mem_load_data_raw = is_timer_addr ? timer_rdata : cpu_dmem_rdata;
 
     // =========================================================================
     // MEM/WB Pipeline Register
@@ -872,6 +1037,79 @@ module riscv_soc (
             wb_jump          <= mem_jump;
             wb_ebreak        <= mem_ebreak;
             wb_valid         <= mem_valid;
+        end
+    end
+
+    // =========================================================================
+    // CSR Write and Timer Logic
+    // =========================================================================
+    
+    // Note: csr_new_val calculation moved up to mem_csr_fwd_val for forwarding
+    // Use mem_csr_fwd_val for CSR writes
+    
+    // Timer and CSR update
+    always_ff @(posedge clk) begin
+        if (cpu_rst) begin
+            // Reset CSRs
+            csr_mstatus <= 32'b0;
+            csr_mie     <= 32'b0;
+            csr_mtvec   <= 32'b0;
+            csr_mepc    <= 32'b0;
+            csr_mcause  <= 32'b0;
+            csr_mtval   <= 32'b0;
+            csr_mip     <= 32'b0;
+            mtime       <= 64'b0;
+            mtimecmp    <= 64'hFFFFFFFFFFFFFFFF;  // Start with max to prevent immediate interrupt
+            interrupt_taken <= 1'b0;
+        end else if (cpu_running) begin
+            // Increment timer every cycle
+            mtime <= mtime + 1;
+            
+            // Update mip.MTIP based on timer comparison
+            csr_mip[7] <= (mtime >= mtimecmp);
+            
+            // Handle interrupt
+            interrupt_taken <= 1'b0;
+            if (timer_interrupt && !interrupt_taken) begin
+                // Take the interrupt: save state
+                csr_mepc <= interrupt_pc;
+                csr_mcause <= 32'h80000007;  // Timer interrupt
+                csr_mstatus[7] <= csr_mstatus[3];  // MPIE = MIE
+                csr_mstatus[3] <= 1'b0;  // Disable interrupts
+                interrupt_taken <= 1'b1;
+            end
+            
+            // Handle MRET instruction (detected in ID stage, but executed when reaching MEM)
+            // MRET should restore mstatus.MIE from mstatus.MPIE
+            if (mem_valid && mem_mret) begin
+                csr_mstatus[3] <= csr_mstatus[7];  // MIE = MPIE
+                csr_mstatus[7] <= 1'b1;  // MPIE = 1
+            end
+            
+            // CSR write (in MEM stage to avoid hazards)
+            if (mem_valid && mem_csr_en) begin
+                case (mem_csr_addr)
+                    CSR_MSTATUS: csr_mstatus <= mem_csr_fwd_val;
+                    CSR_MIE:     csr_mie     <= mem_csr_fwd_val;
+                    CSR_MTVEC:   csr_mtvec   <= mem_csr_fwd_val;
+                    CSR_MEPC:    csr_mepc    <= mem_csr_fwd_val;
+                    CSR_MCAUSE:  csr_mcause  <= mem_csr_fwd_val;
+                    CSR_MTVAL:   csr_mtval   <= mem_csr_fwd_val;
+                    // MIP is mostly read-only, but allow clearing MTIP by software
+                    CSR_MIP:     csr_mip     <= mem_csr_fwd_val;
+                    default: ;  // Unknown CSR, ignore
+                endcase
+            end
+            
+            // Memory-mapped timer writes
+            if (mem_mem_write && mem_valid && is_timer_addr) begin
+                case (mem_alu_result[3:2])
+                    2'b10: mtimecmp[31:0]  <= store_data_shifted;  // 0x1008: MTIMECMP_LO
+                    2'b11: mtimecmp[63:32] <= store_data_shifted;  // 0x100C: MTIMECMP_HI
+                    // 0x1000 and 0x1004 are read-only (mtime)
+                    default: ;
+                endcase
+            end
         end
     end
 

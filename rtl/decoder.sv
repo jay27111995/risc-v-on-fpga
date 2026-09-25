@@ -47,7 +47,13 @@ module decoder (
     output logic        jump_reg,    // JALR (jump to register+offset)?
     output logic        lui,         // LUI instruction (rd = imm)?
     output logic        auipc,       // AUIPC instruction (rd = PC + imm)?
-    output logic        ebreak       // EBREAK instruction (halt CPU)?
+    output logic        ebreak,      // EBREAK instruction (halt CPU)?
+
+    // CSR signals
+    output logic        csr_en,      // CSR instruction?
+    output logic [1:0]  csr_op,      // 00=RW, 01=RS, 10=RC
+    output logic        csr_imm,     // Use immediate (CSRRWI, etc.)?
+    output logic [11:0] csr_addr     // CSR address
 );
 
 // Extract fixed fields (same position for all formats)
@@ -93,6 +99,10 @@ always_comb begin
     lui = 0;
     auipc = 0;
     ebreak = 0;
+    csr_en = 0;
+    csr_op = 2'b00;
+    csr_imm = 0;
+    csr_addr = 12'b0;
 
     case (opcode)
         OP_RTYPE: begin  // R-type: ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU + M extension
@@ -212,13 +222,35 @@ always_comb begin
             imm = {instr[31:12], 12'b0};
         end
 
-        OP_SYSTEM: begin  // ECALL, EBREAK
+        OP_SYSTEM: begin  // ECALL, EBREAK, CSR instructions
             // EBREAK: instr = 0x00100073 (imm[11:0] = 0x001)
             // ECALL:  instr = 0x00000073 (imm[11:0] = 0x000)
-            if (instr[20]) begin  // imm[0] = 1 means EBREAK
-                ebreak = 1;
+            // CSR: funct3 != 0
+            if (funct3 == 3'b000) begin
+                // ECALL/EBREAK
+                if (instr[20]) begin  // imm[0] = 1 means EBREAK
+                    ebreak = 1;
+                end
+                // ECALL not implemented - treated as NOP
+            end else begin
+                // CSR instructions
+                csr_en = 1;
+                csr_addr = instr[31:20];
+                reg_write = 1;  // CSR read goes to rd
+                
+                case (funct3)
+                    3'b001: begin csr_op = 2'b00; csr_imm = 0; end  // CSRRW
+                    3'b010: begin csr_op = 2'b01; csr_imm = 0; end  // CSRRS
+                    3'b011: begin csr_op = 2'b10; csr_imm = 0; end  // CSRRC
+                    3'b101: begin csr_op = 2'b00; csr_imm = 1; end  // CSRRWI
+                    3'b110: begin csr_op = 2'b01; csr_imm = 1; end  // CSRRSI
+                    3'b111: begin csr_op = 2'b10; csr_imm = 1; end  // CSRRCI
+                    default: csr_en = 0;
+                endcase
+                
+                // For immediate variants, use rs1 field as zimm (zero-extended)
+                imm = {27'b0, instr[19:15]};
             end
-            // ECALL not implemented - treated as NOP
         end
 
         default: begin
