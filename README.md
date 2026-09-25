@@ -7,8 +7,6 @@ A complete RV32IM RISC-V CPU with PCIe BAR interface and virtual UART, targeting
 ## Status
 
 - **RV32IM CPU**: ✅ Working (all base + M extension instructions)
-- **Virtual UART**: ✅ Working (printf/scanf over PCIe)
-- **Test Suite**: ✅ 47/47 tests passing
 
 ## Project Structure
 
