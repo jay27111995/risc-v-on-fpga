@@ -8,6 +8,11 @@ A complete RV32IM RISC-V CPU with PCIe BAR interface and virtual UART, targeting
 
 - **RV32IM CPU**: ✅ Working (all base + M extension instructions)
 
+## TODO
+
+- [ ] Integrate riscv-arch-test compliance suite
+- [ ] Fix multiplier timing (add pipeline stage for 250 MHz closure)
+
 ## Project Structure
 
 ```
