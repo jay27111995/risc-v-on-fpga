@@ -48,6 +48,10 @@ module decoder (
     output logic        lui,         // LUI instruction (rd = imm)?
     output logic        auipc,       // AUIPC instruction (rd = PC + imm)?
     output logic        ebreak,      // EBREAK instruction (halt CPU)?
+    output logic        ecall,       // ECALL instruction (environment call)?
+    output logic        wfi,         // WFI instruction (wait for interrupt)?
+    output logic        fence,       // FENCE instruction (memory barrier)?
+    output logic        fence_i,     // FENCE.I instruction (instruction barrier)?
 
     // CSR signals
     output logic        csr_en,      // CSR instruction?
@@ -71,16 +75,17 @@ assign rs2 = instr[24:20];
 assign rd  = instr[11:7];
 
 // Opcodes
-localparam OP_RTYPE  = 7'b0110011;  // ADD, SUB, AND, OR, XOR
-localparam OP_ITYPE  = 7'b0010011;  // ADDI, ANDI, ORI, XORI
-localparam OP_LOAD   = 7'b0000011;  // LW
-localparam OP_STORE  = 7'b0100011;  // SW
-localparam OP_BRANCH = 7'b1100011;  // BEQ, BNE
-localparam OP_JAL    = 7'b1101111;  // JAL
-localparam OP_JALR   = 7'b1100111;  // JALR
-localparam OP_LUI    = 7'b0110111;  // LUI
-localparam OP_AUIPC  = 7'b0010111;  // AUIPC
-localparam OP_SYSTEM = 7'b1110011;  // ECALL, EBREAK
+localparam OP_RTYPE   = 7'b0110011;  // ADD, SUB, AND, OR, XOR
+localparam OP_ITYPE   = 7'b0010011;  // ADDI, ANDI, ORI, XORI
+localparam OP_LOAD    = 7'b0000011;  // LW
+localparam OP_STORE   = 7'b0100011;  // SW
+localparam OP_BRANCH  = 7'b1100011;  // BEQ, BNE
+localparam OP_JAL     = 7'b1101111;  // JAL
+localparam OP_JALR    = 7'b1100111;  // JALR
+localparam OP_LUI     = 7'b0110111;  // LUI
+localparam OP_AUIPC   = 7'b0010111;  // AUIPC
+localparam OP_SYSTEM  = 7'b1110011;  // ECALL, EBREAK, CSR, WFI
+localparam OP_MISCMEM = 7'b0001111;  // FENCE, FENCE.I
 
 // Decode logic
 always_comb begin
@@ -99,6 +104,10 @@ always_comb begin
     lui = 0;
     auipc = 0;
     ebreak = 0;
+    ecall = 0;
+    wfi = 0;
+    fence = 0;
+    fence_i = 0;
     csr_en = 0;
     csr_op = 2'b00;
     csr_imm = 0;
@@ -222,22 +231,27 @@ always_comb begin
             imm = {instr[31:12], 12'b0};
         end
 
-        OP_SYSTEM: begin  // ECALL, EBREAK, CSR instructions
+        OP_SYSTEM: begin  // ECALL, EBREAK, CSR instructions, WFI, MRET
             // EBREAK: instr = 0x00100073 (imm[11:0] = 0x001)
             // ECALL:  instr = 0x00000073 (imm[11:0] = 0x000)
+            // WFI:    instr = 0x10500073 (imm[11:0] = 0x105)
+            // MRET:   instr = 0x30200073 (imm[11:0] = 0x302)
             // CSR: funct3 != 0
             if (funct3 == 3'b000) begin
-                // ECALL/EBREAK
-                if (instr[20]) begin  // imm[0] = 1 means EBREAK
-                    ebreak = 1;
-                end
-                // ECALL not implemented - treated as NOP
+                // ECALL/EBREAK/MRET/WFI
+                case (instr[31:20])
+                    12'h000: ecall = 1;   // ECALL
+                    12'h001: ebreak = 1;  // EBREAK
+                    12'h105: wfi = 1;     // WFI - wait for interrupt
+                    12'h302: ;            // MRET - handled separately in riscv_soc
+                    default: ;            // Unknown, treat as NOP
+                endcase
             end else begin
                 // CSR instructions
                 csr_en = 1;
                 csr_addr = instr[31:20];
                 reg_write = 1;  // CSR read goes to rd
-                
+
                 case (funct3)
                     3'b001: begin csr_op = 2'b00; csr_imm = 0; end  // CSRRW
                     3'b010: begin csr_op = 2'b01; csr_imm = 0; end  // CSRRS
@@ -247,10 +261,21 @@ always_comb begin
                     3'b111: begin csr_op = 2'b10; csr_imm = 1; end  // CSRRCI
                     default: csr_en = 0;
                 endcase
-                
+
                 // For immediate variants, use rs1 field as zimm (zero-extended)
                 imm = {27'b0, instr[19:15]};
             end
+        end
+
+        OP_MISCMEM: begin  // FENCE, FENCE.I
+            // FENCE:   funct3 = 000, opcode = 0001111
+            // FENCE.I: funct3 = 001, opcode = 0001111
+            // Both are NOPs for our simple in-order, single-hart, no-cache design
+            case (funct3)
+                3'b000: fence = 1;    // FENCE - memory ordering (NOP)
+                3'b001: fence_i = 1;  // FENCE.I - instruction fetch barrier (NOP)
+                default: ;            // Unknown, treat as NOP
+            endcase
         end
 
         default: begin

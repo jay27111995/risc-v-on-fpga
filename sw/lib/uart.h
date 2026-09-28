@@ -46,6 +46,14 @@ static void print_int(int n) {
     while (i > 0) putchar(buf[--i]);
 }
 
+static void print_uint(unsigned int n) {
+    char buf[12];
+    int i = 0;
+    if (n == 0) { putchar('0'); return; }
+    while (n > 0) { buf[i++] = '0' + (n % 10); n /= 10; }
+    while (i > 0) putchar(buf[--i]);
+}
+
 static void print_hex(unsigned int n) {
     const char hex[] = "0123456789ABCDEF";
     putchar('0'); putchar('x');
@@ -60,6 +68,7 @@ static void printf(const char *fmt, ...) {
             fmt++;
             switch (*fmt) {
                 case 'd': case 'i': print_int(__builtin_va_arg(args, int)); break;
+                case 'u': print_uint(__builtin_va_arg(args, unsigned int)); break;
                 case 'x': case 'X': print_hex(__builtin_va_arg(args, unsigned int)); break;
                 case 's': print(__builtin_va_arg(args, char*)); break;
                 case 'c': putchar(__builtin_va_arg(args, int)); break;
@@ -79,20 +88,20 @@ static int read_int(void) {
     int n = 0;
     int neg = 0;
     char c;
-    
+
     // Skip leading whitespace
     do { c = getchar(); } while (c == ' ' || c == '\t');
-    
+
     // Check sign
     if (c == '-') { neg = 1; c = getchar(); }
     else if (c == '+') { c = getchar(); }
-    
+
     // Read digits until Enter or space
     while (c >= '0' && c <= '9') {
         n = n * 10 + (c - '0');
         c = getchar();
     }
-    
+
     return neg ? -n : n;
 }
 

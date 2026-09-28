@@ -35,6 +35,7 @@ static int fprintf(FILE *f, const char *fmt, ...) {
             fmt++;
             switch (*fmt) {
                 case 'd': case 'i': print_int(__builtin_va_arg(args, int)); break;
+                case 'u': print_uint(__builtin_va_arg(args, unsigned int)); break;
                 case 'x': case 'X': print_hex(__builtin_va_arg(args, unsigned int)); break;
                 case 's': print(__builtin_va_arg(args, char*)); break;
                 case 'c': putchar(__builtin_va_arg(args, int)); break;
