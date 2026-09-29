@@ -26,6 +26,20 @@ sw/
 
 Output: `build/hello_sum.elf`
 
+## Example Programs
+
+| Program | Description |
+|---------|-------------|
+| `hello_sum.c` | Interactive sum with printf/scanf |
+| `factorial.c` | Factorial calculation |
+| `sort_test.c` | Quicksort + insertion sort |
+| `tree_test.c` | Binary search tree |
+| `ecall_test.c` | ECALL trap handling test |
+| `timer_int_test.c` | Timer interrupt test |
+| `wfi_test.c` | Wait-for-interrupt test |
+| `fence_test.c` | FENCE/FENCE.I test |
+| `csr_test.c` | CSR read/write tests |
+
 ## Writing Programs
 
 ```c
@@ -46,7 +60,7 @@ int main(void) {
 ## Available Functions
 
 ### stdio.h
-- `printf(fmt, ...)` - %d, %s, %c, %x
+- `printf(fmt, ...)` - %d, %u, %s, %c, %x
 - `scanf(fmt, ...)` - %d
 - `putchar(c)`, `getchar()`
 - `puts(s)`, `print(s)`

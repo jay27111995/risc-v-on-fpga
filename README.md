@@ -7,16 +7,24 @@ A complete RV32IM RISC-V CPU with PCIe BAR interface and virtual UART, targeting
 ## Status
 
 - **RV32IM CPU**: ✅ Working (all base + M extension instructions)
+- **Machine Mode**: ✅ Working (CSRs, interrupts, exceptions)
+  - Timer interrupts (mtime/mtimecmp)
+  - ECALL/EBREAK traps
+  - MRET return from trap
+  - WFI (wait for interrupt)
+  - FENCE/FENCE.I (as NOPs)
+  - CSRs: mstatus, mie, mip, mtvec, mepc, mcause, mtval, mscratch, mcycle, minstret
 
 ## TODO
 
 - [ ] Integrate riscv-arch-test compliance suite
 - [ ] Fix multiplier timing (add pipeline stage for 250 MHz closure)
+- [ ] Zephyr RTOS board support
 
 ## Project Structure
 
 ```
-├── rtl/          # Verilog RTL (CPU, SoC, memories)
+├── rtl/          # SystemVerilog RTL (CPU, SoC, memories)
 ├── sw/           # Software (libc, examples, build tools)
 ├── host/         # Host tools (elf_loader, uart_console)
 ├── tb/           # Testbench (Verilator)
