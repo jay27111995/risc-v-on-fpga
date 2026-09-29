@@ -67,9 +67,9 @@ int main(void) {
     uint32_t scratch;
     asm volatile ("csrr %0, mscratch" : "=r"(scratch));
     if (scratch == 0xDEADBEEF) {
-        printf("   PASS: mscratch = 0x%x\n", scratch);
+        printf("   PASS: mscratch = %x\n", scratch);
     } else {
-        printf("   FAIL: mscratch = 0x%x (expected 0xDEADBEEF)\n", scratch);
+        printf("   FAIL: mscratch = %x (expected 0xDEADBEEF)\n", scratch);
         errors++;
     }
     
@@ -119,7 +119,7 @@ int main(void) {
     
     printf("   Returned from ecall!\n");
     printf("   ecall_count = %u\n", ecall_count);
-    printf("   ecall_mepc = 0x%x\n", ecall_mepc);
+    printf("   ecall_mepc = %x\n", ecall_mepc);
     printf("   ecall_mcause = %u\n", ecall_mcause);
     
     if (ecall_count == 1) {
@@ -137,24 +137,31 @@ int main(void) {
     }
     
     // Test 5: Multiple ECALLs
-    printf("5. Testing multiple ECALLs...\n");
+    printf("5. Testing single ECALL with debug...\n");
     ecall_count = 0;
+    printf("   Before ECALL, count=%u\n", ecall_count);
     asm volatile ("ecall");
+    printf("   After ECALL 1, count=%u, mepc=%x\n", ecall_count, ecall_mepc);
     asm volatile ("ecall");
+    printf("   After ECALL 2, count=%u, mepc=%x\n", ecall_count, ecall_mepc);
     asm volatile ("ecall");
-    
+    printf("   After ECALL 3, count=%u, mepc=%x\n", ecall_count, ecall_mepc);
+
     if (ecall_count == 3) {
         printf("   PASS: 3 ECALLs triggered %u handlers\n", ecall_count);
     } else {
         printf("   FAIL: ecall_count = %u (expected 3)\n", ecall_count);
-        // Don't count this as error for now - might be printf triggering extra syscall
-        // errors++;
+        errors++;
     }
     
     printf("\n=== Results: %d errors ===\n", errors);
     if (errors == 0) {
         printf("ALL TESTS PASSED!\n");
     }
+    
+    // Halt here to prevent restart
+    printf("DONE - halting\n");
+    while(1);
     
     return errors;
 }

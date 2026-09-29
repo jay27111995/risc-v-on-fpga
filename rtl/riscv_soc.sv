@@ -1189,13 +1189,14 @@ module riscv_soc (
             end
 
             // CSR write (in MEM stage to avoid hazards)
+            // Note: ecall_trap takes priority for MEPC to avoid race condition
             if (mem_valid && mem_csr_en) begin
                 case (mem_csr_addr)
                     CSR_MSTATUS:  csr_mstatus  <= mem_csr_fwd_val;
                     CSR_MIE:      csr_mie      <= mem_csr_fwd_val;
                     CSR_MTVEC:    csr_mtvec    <= mem_csr_fwd_val;
                     CSR_MSCRATCH: csr_mscratch <= mem_csr_fwd_val;
-                    CSR_MEPC:     csr_mepc     <= mem_csr_fwd_val;
+                    CSR_MEPC:     if (!ecall_trap) csr_mepc <= mem_csr_fwd_val;  // ECALL takes priority
                     CSR_MCAUSE:   csr_mcause   <= mem_csr_fwd_val;
                     CSR_MTVAL:    csr_mtval    <= mem_csr_fwd_val;
                     // MIP is mostly read-only, but allow clearing MTIP by software
