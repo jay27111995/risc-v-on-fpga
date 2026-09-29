@@ -21,9 +21,6 @@ LIBS="$OUT/pcie_vfio.o $OUT/riscv_lib.o"
 gcc $CFLAGS -c $SRC/riscv_host.c -o $OUT/riscv_host.o
 gcc $CFLAGS $LIBS $OUT/riscv_host.o -o $OUT/riscv_host
 
-gcc $CFLAGS -c $SRC/loader.c -o $OUT/loader.o
-gcc $CFLAGS $LIBS $OUT/loader.o -o $OUT/loader
-
 gcc $CFLAGS -Wno-unused-result -c $SRC/elf_loader.c -o $OUT/elf_loader.o
 gcc $CFLAGS $LIBS $OUT/elf_loader.o -o $OUT/elf_loader
 
@@ -44,12 +41,12 @@ rm -f $OUT/*.o
 
 echo ""
 echo "Built in $OUT/:"
-echo "  riscv_host    - RV32I instruction tests"
-echo "  loader        - Load binary to IMEM and run"
-echo "  test_sniffer  - Bus sniffer test"
-echo "  test_logger   - CPU logger test with IMEM tracing"
-echo "  test_programs - Run sum.c and factorial.c"
+echo "  elf_loader    - Load ELF to FPGA and run"
 echo "  uart_console  - Virtual UART terminal"
+echo "  riscv_host    - RV32I instruction tests"
+echo "  test_sniffer  - Bus sniffer test"
+echo "  test_logger   - CPU logger test"
+echo "  test_programs - Run sum.c and factorial.c"
 echo ""
 
 # Usage instructions

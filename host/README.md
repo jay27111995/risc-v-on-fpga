@@ -32,7 +32,6 @@ sudo ./bin/uart_console 0000:b1:00.0 12
 Ctrl-C to exit.
 
 ### Other Tools
-- `loader` - Old binary loader (IMEM only)
 - `riscv_host` - Instruction tests
 - `test_sniffer` - Bus sniffer debug
 - `test_logger` - CPU logger debug
