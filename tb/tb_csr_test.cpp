@@ -109,18 +109,19 @@ int main(int argc, char** argv) {
         uint32_t p_offset = *(uint32_t*)&phdr[4];
         uint32_t p_vaddr = *(uint32_t*)&phdr[8];
         uint32_t p_filesz = *(uint32_t*)&phdr[16];
+        uint32_t p_memsz = *(uint32_t*)&phdr[20];
         
         printf("  Segment: vaddr=0x%08x, foff=0x%x, size=%d\n", p_vaddr, p_offset, p_filesz);
         
-        uint8_t* data = new uint8_t[p_filesz + 4];
-        memset(data, 0, p_filesz + 4);
+        uint8_t* data = new uint8_t[p_memsz + 4];
+        memset(data, 0, p_memsz + 4);  // Zero entire segment (handles BSS)
         fseek(f, p_offset, SEEK_SET);
-        fread(data, 1, p_filesz, f);
+        fread(data, 1, p_filesz, f);   // Read only filesz bytes
         
         if (p_vaddr < 0x10000000) {
             // IMEM - write via host interface
             printf("    Loading to IMEM at 0x%08x\n", IMEM_BASE + p_vaddr);
-            for (uint32_t j = 0; j < p_filesz; j += 4) {
+            for (uint32_t j = 0; j < p_memsz; j += 4) {
                 uint32_t word = data[j] | (data[j+1]<<8) | (data[j+2]<<16) | (data[j+3]<<24);
                 host_write(dut, IMEM_BASE + p_vaddr + j, word);
                 if (j == 0) printf("    First word: 0x%08x\n", word);
@@ -128,7 +129,7 @@ int main(int argc, char** argv) {
         } else {
             // DMEM
             uint32_t dmem_off = p_vaddr - 0x10000000;
-            for (uint32_t j = 0; j < p_filesz; j += 4) {
+            for (uint32_t j = 0; j < p_memsz; j += 4) {
                 uint32_t word = data[j] | (data[j+1]<<8) | (data[j+2]<<16) | (data[j+3]<<24);
                 host_write(dut, DMEM_BASE + dmem_off + j, word);
             }
