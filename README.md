@@ -7,13 +7,7 @@ A complete RV32IM RISC-V CPU with PCIe BAR interface and virtual UART, targeting
 ## Status
 
 - **RV32IM CPU**: ✅ Working (all base + M extension instructions)
-- **Machine Mode**: ✅ Working (CSRs, interrupts, exceptions)
-  - Timer interrupts (mtime/mtimecmp)
-  - ECALL/EBREAK traps
-  - MRET return from trap
-  - WFI (wait for interrupt)
-  - FENCE/FENCE.I (as NOPs)
-  - CSRs: mstatus, mie, mip, mtvec, mepc, mcause, mtval, mscratch, mcycle, minstret
+- **Machine Mode**: ✅ Working (CSRs, timer interrupts, traps, WFI)
 
 ## TODO
 
