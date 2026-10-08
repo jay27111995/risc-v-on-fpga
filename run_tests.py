@@ -103,7 +103,9 @@ def run_test(name, verbose=False):
     
     # Analyze
     out_lower = output.lower()
-    if "fail" in out_lower and "0 error" not in out_lower:
+    # Check for failure indicators, but exclude "0 failed" pattern
+    has_failure = "fail" in out_lower and "0 failed" not in out_lower and "0 error" not in out_lower
+    if has_failure:
         print(f"{R}✗{N} {name}")
         if verbose:
             for line in output.strip().split('\n')[-5:]:
