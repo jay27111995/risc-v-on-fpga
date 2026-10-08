@@ -13,6 +13,9 @@ import argparse
 import subprocess
 import sys
 import os
+import time
+import signal
+import select
 from pathlib import Path
 
 # Colors
@@ -31,7 +34,7 @@ class TestRunner:
         self.timeout = timeout
         
         self.elf_loader = self.script_dir / "host" / "bin" / "elf_loader"
-        self.uart_read = self.script_dir / "host" / "bin" / "uart_read"
+        self.uart_console = self.script_dir / "host" / "bin" / "uart_console"
         
         self.passed = 0
         self.failed = 0
@@ -117,15 +120,54 @@ class TestRunner:
         self.log(f"Load output: {stdout.strip()}")
         
         # Small delay to let CPU run
-        import time
         time.sleep(0.2)
         
-        # Capture UART output (use uart_read for one-shot read)
+        # Capture UART output using uart_console with proper kill
         self.log("Reading UART output...")
-        env = os.environ.copy()
-        env["VFIO_QUIET"] = "1"
-        cmd = ["sudo", "-E", str(self.uart_read), self.pcie_addr, self.iommu_group]
-        rc, output, stderr = self.run_cmd(cmd, timeout=self.timeout, env=env)
+        cmd = ["sudo", str(self.uart_console), self.pcie_addr, self.iommu_group]
+        
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                preexec_fn=os.setsid  # Create new process group for clean kill
+            )
+            
+            # Wait for output with timeout
+            import select
+            output_lines = []
+            start_time = time.time()
+            
+            while time.time() - start_time < self.timeout:
+                # Check if there's data to read
+                ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+                if ready:
+                    line = proc.stdout.readline()
+                    if line:
+                        output_lines.append(line)
+                    else:
+                        break  # EOF
+            
+            output = ''.join(output_lines)
+            
+            # Kill the process group
+            import signal
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                proc.wait(timeout=1)
+            except:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                proc.wait(timeout=1)
+            
+            stderr = ""
+            rc = 0
+        except Exception as e:
+            self.log(f"Error: {e}")
+            output = ""
+            stderr = str(e)
+            rc = -1
         
         self.log(f"UART output ({len(output)} chars): {repr(output[:200])}")
         
