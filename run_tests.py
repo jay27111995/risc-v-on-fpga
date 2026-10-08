@@ -151,17 +151,23 @@ class TestRunner:
             output = ''.join(output_lines)
             
             # Kill uart_console (runs as root, need sudo kill)
-            subprocess.run(["sudo", "pkill", "-f", "uart_console"], 
+            subprocess.run(["sudo", "pkill", "-9", "-f", "uart_console"], 
                           capture_output=True, timeout=2)
-            proc.wait(timeout=1)
+            try:
+                proc.wait(timeout=1)
+            except:
+                pass
+            # Give VFIO time to release
+            time.sleep(0.5)
             
             stderr = ""
             rc = 0
         except Exception as e:
             self.log(f"Error: {e}")
             # Make sure to kill on error too
-            subprocess.run(["sudo", "pkill", "-f", "uart_console"], 
+            subprocess.run(["sudo", "pkill", "-9", "-f", "uart_console"], 
                           capture_output=True, timeout=2)
+            time.sleep(0.5)
             output = ""
             stderr = str(e)
             rc = -1
