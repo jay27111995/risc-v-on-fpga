@@ -21,5 +21,6 @@ int main(void) {
     // If we get here, FENCE instructions didn't crash
     printf("\nPASS: FENCE and FENCE.I executed without error\n");
     
+    puts("===END===");
     return 0;
 }

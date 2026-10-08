@@ -161,6 +161,7 @@ int main(void) {
     
     // Halt here to prevent restart
     printf("DONE - halting\n");
+    puts("===END===");
     while(1);
     
     return errors;

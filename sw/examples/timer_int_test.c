@@ -176,6 +176,7 @@ int main(void) {
     }
     
     printf("\n=== Test Complete ===\n");
+    puts("===END===");
     
     return (interrupt_count > 0) ? 0 : 1;
 }

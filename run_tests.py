@@ -48,8 +48,7 @@ def read_uart(queue, timeout=2):
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
         lines = []
-        end_markers = ["Done!", "ALL TESTS PASSED", "HALTING", "Test Complete", 
-                       "=== Results", "=== WFI Test", "PASS:", "Hi!"]
+        end_marker = "===END==="
         
         start = time.time()
         while time.time() - start < timeout:
@@ -58,7 +57,7 @@ def read_uart(queue, timeout=2):
                 break
             lines.append(line)
             # Check for end marker
-            if any(m in line for m in end_markers):
+            if end_marker in line:
                 break
         
         proc.kill()

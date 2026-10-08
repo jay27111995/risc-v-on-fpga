@@ -15,5 +15,6 @@ int main(void) {
     int result = factorial(n);
     printf("\n%d! = %d\n", n, result);
     
+    puts("===END===");
     return 0;
 }

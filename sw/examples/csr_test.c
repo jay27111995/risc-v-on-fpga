@@ -67,6 +67,7 @@ int test_csr_rw(void) {
     printf("  mie: wrote 0x80, read 0x%x - %s\n", val, val == 0x80 ? "PASS" : "FAIL");
     if (val != 0x80) return 1;
     
+    puts("===END===");
     return 0;
 }
 

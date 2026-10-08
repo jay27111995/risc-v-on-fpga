@@ -66,5 +66,6 @@ int main(void) {
     print_list(list);
     
     printf("\nDone!\n");
+    puts("===END===");
     return 0;
 }

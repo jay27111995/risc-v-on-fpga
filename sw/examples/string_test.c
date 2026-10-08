@@ -31,5 +31,6 @@ int main(void) {
     printf("itoa(42) = %s\n", num);
     
     printf("\nDone!\n");
+    puts("===END===");
     return 0;
 }

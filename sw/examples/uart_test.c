@@ -13,5 +13,6 @@ int main(void) {
         putchar(c);
     }
     
+    puts("===END===");
     return 0;
 }

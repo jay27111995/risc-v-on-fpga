@@ -17,5 +17,6 @@ int main() {
     
     puts("\nDone!");
     
+    puts("===END===");
     return 0;
 }

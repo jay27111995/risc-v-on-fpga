@@ -48,5 +48,6 @@ int main(void) {
         printf("\nFAIL: handler_called = %u\n", handler_called);
     }
     
+    puts("===END===");
     return (handler_called == 1) ? 0 : 1;
 }

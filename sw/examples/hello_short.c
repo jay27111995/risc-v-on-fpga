@@ -5,5 +5,6 @@ int main() {
     putchar('H');
     putchar('i');
     putchar('!');
+    puts("===END===");
     return 0;
 }

@@ -282,5 +282,6 @@ int main(void) {
     }
     printf("========================================\n");
     
+    puts("===END===");
     return errors;
 }

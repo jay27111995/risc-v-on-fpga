@@ -108,5 +108,6 @@ int main(void) {
     print_array(arr, N, "Quick   ");
     
     printf("\nDone!\n");
+    puts("===END===");
     return 0;
 }

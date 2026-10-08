@@ -2,6 +2,8 @@
  * Uses direct memory addresses (no pointers)
  */
 
+#include "stdio.h"
+
 // Direct write to memory address using inline assembly
 #define DMEM_WRITE(addr, val) \
     __asm__ volatile ("sw %0, %1(zero)" : : "r"(val), "i"(addr))
@@ -31,6 +33,7 @@ void main(void) {
     DMEM_WRITE(12, result + 5); // DMEM[3] = 60
     DMEM_WRITE(16, result - 5); // DMEM[4] = 50
     
+    puts("===END===");
     // Halt - infinite loop
     while(1);
 }

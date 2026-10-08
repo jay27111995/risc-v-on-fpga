@@ -97,5 +97,6 @@ int main(void) {
     printf("Find 99: %s\n", find(root, 99) ? "found" : "not found");
     
     printf("\nDone!\n");
+    puts("===END===");
     return 0;
 }

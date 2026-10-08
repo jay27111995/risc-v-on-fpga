@@ -14,5 +14,6 @@ int main(void) {
     
     printf("\nSum(1..%d) = %d\n", n, sum);
     
+    puts("===END===");
     return 0;
 }

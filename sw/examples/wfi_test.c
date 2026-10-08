@@ -100,6 +100,7 @@ int main(void) {
     }
     
     printf("\n=== WFI Test %s ===\n", errors == 0 ? "PASSED" : "FAILED");
+    puts("===END===");
     
     return errors;
 }
