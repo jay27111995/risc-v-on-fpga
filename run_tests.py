@@ -193,6 +193,7 @@ class TestRunner:
                 proc.wait(timeout=1)
             except:
                 pass
+            time.sleep(0.5)  # Wait for VFIO to release
             
             return ''.join(output_lines)
             
@@ -200,6 +201,7 @@ class TestRunner:
             self.log(f"UART read error: {e}")
             subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{self.iommu_group}"],
                           capture_output=True, timeout=2)
+            time.sleep(0.5)
             return ""
     
     def run_suite(self, tests=None):
