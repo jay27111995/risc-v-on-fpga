@@ -24,17 +24,31 @@ volatile int lock = 0;
 int main(void) {
     puts("Atomic test (LR.W/SC.W)\n");
     
+    // Print address of shared_var
+    puts("shared_var addr: ");
+    print_int((int)&shared_var);
+    puts("\n");
+    
     // First, verify basic LW works
     puts("Verifying LW...\n");
     int lw_val = shared_var;  // Regular load
+    puts("LW result: ");
     print_int(lw_val);
-    puts(" = LW value (should be 100)\n");
+    puts(" (should be 100)\n");
     
-    // Test 1: Simple LR/SC sequence (should succeed)
-    puts("Test 1: Simple LR/SC...\n");
-    int val = lr_w(&shared_var);
+    // Now try LR.W
+    puts("Trying LR.W...\n");
+    
+    // Store the address in a variable to ensure s0 is set correctly
+    volatile int *addr = &shared_var;
+    puts("addr ptr: ");
+    print_int((int)addr);
+    puts("\n");
+    
+    int val = lr_w(addr);
+    puts("LR.W result: ");
     print_int(val);
-    puts(" = initial value\n");
+    puts("\n");
     
     int sc_result = sc_w(&shared_var, val + 1);
     if (sc_result == 0) {
