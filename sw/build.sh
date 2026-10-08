@@ -8,7 +8,7 @@ TOOLCHAIN=/opt/ALTERA/quartuspro/25.3.1/riscfree/toolchain/riscv32-unknown-elf/b
 export PATH=$TOOLCHAIN:$PATH
 
 CROSS=riscv32-unknown-elf-
-CFLAGS="-march=rv32im -mabi=ilp32 -O2 -nostdlib -nostartfiles -ffreestanding -Ilib"
+CFLAGS="-march=rv32ima -mabi=ilp32 -O2 -nostdlib -nostartfiles -ffreestanding -Ilib"
 LDFLAGS="-T src/link.ld -nostdlib"
 
 if [ $# -lt 1 ]; then
