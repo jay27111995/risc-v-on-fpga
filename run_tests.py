@@ -14,6 +14,7 @@ import subprocess
 import sys
 import os
 import time
+import select
 from pathlib import Path
 
 # Colors
@@ -24,13 +25,18 @@ BLUE = '\033[0;34m'
 NC = '\033[0m'
 
 class TestRunner:
-    def __init__(self, pcie_addr, iommu_group, verbose=False):
+    def __init__(self, pcie_addr, iommu_group, verbose=False, timeout=5):
         self.script_dir = Path(__file__).parent.resolve()
         self.pcie_addr = pcie_addr
         self.iommu_group = iommu_group
         self.verbose = verbose
+        self.timeout = timeout
         
         self.elf_loader = self.script_dir / "host" / "bin" / "elf_loader"
+        self.uart_console = self.script_dir / "host" / "bin" / "uart_console"
+        
+        # End markers that indicate test completed
+        self.end_markers = ["DONE", "ALL TESTS PASSED", "HALTING", "Test Complete"]
         
         self.passed = 0
         self.failed = 0
@@ -113,28 +119,88 @@ class TestRunner:
         
         self.log(f"Load output: {stdout.strip()}")
         
-        # Check if CPU produced output (TX_HEAD > 0 means it wrote to UART)
-        tx_head_match = None
-        for line in stdout.split('\n'):
-            if 'TX_HEAD:' in line:
-                try:
-                    tx_head = int(line.split(':')[1].strip())
-                    tx_head_match = tx_head
-                except:
-                    pass
+        # Read UART output until we see end marker or timeout
+        output = self.read_uart_until_done()
         
-        if tx_head_match is not None and tx_head_match > 0:
-            print(f"{GREEN}✓{NC} {name} (TX_HEAD={tx_head_match})")
+        # Analyze result
+        output_lower = output.lower()
+        
+        if "fail" in output_lower or "error" in output_lower and "0 error" not in output_lower:
+            print(f"{RED}✗{NC} {name}")
+            for line in output.strip().split('\n')[-5:]:
+                print(f"    | {line}")
+            self.failed += 1
+            return False
+        elif "pass" in output_lower or "done" in output_lower:
+            print(f"{GREEN}✓{NC} {name}")
+            if self.verbose:
+                for line in output.strip().split('\n'):
+                    print(f"    | {line}")
             self.passed += 1
             return True
-        elif tx_head_match == 0:
-            print(f"{YELLOW}?{NC} {name} (no UART output)")
-            self.skipped += 1
-            return None
+        elif output.strip():
+            print(f"{GREEN}✓{NC} {name} (completed)")
+            if self.verbose:
+                for line in output.strip().split('\n')[-5:]:
+                    print(f"    | {line}")
+            self.passed += 1
+            return True
         else:
-            print(f"{YELLOW}?{NC} {name} (couldn't parse TX_HEAD)")
+            print(f"{YELLOW}?{NC} {name} (no output)")
             self.skipped += 1
             return None
+    
+    def read_uart_until_done(self):
+        """Read uart_console output until end marker or timeout"""
+        cmd = ["sudo", str(self.uart_console), self.pcie_addr, self.iommu_group]
+        
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            
+            output_lines = []
+            start_time = time.time()
+            found_end = False
+            
+            while time.time() - start_time < self.timeout:
+                ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+                if ready:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break  # EOF
+                    output_lines.append(line)
+                    self.log(f"UART: {line.rstrip()}")
+                    
+                    # Check for end marker
+                    line_upper = line.upper()
+                    for marker in self.end_markers:
+                        if marker in line_upper:
+                            found_end = True
+                            break
+                    
+                    if found_end:
+                        break
+            
+            # Kill uart_console
+            subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{self.iommu_group}"],
+                          capture_output=True, timeout=2)
+            proc.kill()
+            try:
+                proc.wait(timeout=1)
+            except:
+                pass
+            
+            return ''.join(output_lines)
+            
+        except Exception as e:
+            self.log(f"UART read error: {e}")
+            subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{self.iommu_group}"],
+                          capture_output=True, timeout=2)
+            return ""
     
     def run_suite(self, tests=None):
         """Run the full test suite"""
@@ -195,6 +261,7 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--pcie", default="0000:b1:00.0", help="PCIe address")
     parser.add_argument("--iommu", default="12", help="IOMMU group")
+    parser.add_argument("--timeout", type=int, default=5, help="Max seconds to wait for test completion")
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s)")
     parser.add_argument("--skip-build", action="store_true", help="Skip building, just run tests")
     
@@ -204,6 +271,7 @@ def main():
         pcie_addr=args.pcie,
         iommu_group=args.iommu,
         verbose=args.verbose,
+        timeout=args.timeout,
     )
     
     if not args.skip_build:
