@@ -150,24 +150,33 @@ class TestRunner:
             
             output = ''.join(output_lines)
             
-            # Kill uart_console (runs as root, need sudo kill)
-            subprocess.run(["sudo", "pkill", "-9", "-f", "uart_console"], 
-                          capture_output=True, timeout=2)
+            # Kill the actual uart_console process (not just sudo)
+            # Find its PID by looking at who's holding VFIO
             try:
+                result = subprocess.run(
+                    ["sudo", "fuser", "-k", "-9", "/dev/vfio/" + self.iommu_group],
+                    capture_output=True, timeout=2
+                )
+            except:
+                pass
+            
+            try:
+                proc.kill()
                 proc.wait(timeout=1)
             except:
                 pass
+            
             # Give VFIO time to release
-            time.sleep(0.5)
+            time.sleep(0.3)
             
             stderr = ""
             rc = 0
         except Exception as e:
             self.log(f"Error: {e}")
             # Make sure to kill on error too
-            subprocess.run(["sudo", "pkill", "-9", "-f", "uart_console"], 
+            subprocess.run(["sudo", "fuser", "-k", "-9", "/dev/vfio/" + self.iommu_group], 
                           capture_output=True, timeout=2)
-            time.sleep(0.5)
+            time.sleep(0.3)
             output = ""
             stderr = str(e)
             rc = -1
