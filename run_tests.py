@@ -220,6 +220,12 @@ class TestRunner:
         print(f"Verbose: {self.verbose}, Timeout: {self.timeout}s")
         print()
         
+        # Clean up any leftover processes holding VFIO
+        self.log("Cleaning up stale processes...")
+        subprocess.run(["sudo", "fuser", "-k", "-9", "/dev/vfio/" + self.iommu_group],
+                      capture_output=True, timeout=5)
+        time.sleep(0.5)
+        
         # Check prerequisites
         if not self.elf_loader.exists():
             print(f"{RED}Error: elf_loader not found at {self.elf_loader}{NC}")
