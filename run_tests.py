@@ -33,7 +33,7 @@ def cleanup():
                    capture_output=True, timeout=5)
     subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{IOMMU}"],
                    capture_output=True, timeout=5)
-    time.sleep(0.3)
+    time.sleep(0.5)
 
 def load_elf(elf_path):
     """Load ELF file to FPGA, return True if success"""
