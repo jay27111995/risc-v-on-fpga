@@ -3,11 +3,18 @@
 
 set -e
 
-# RISC-V toolchain
-TOOLCHAIN=/opt/ALTERA/quartuspro/25.3.1/riscfree/toolchain/riscv32-unknown-elf/bin
+# RISC-V toolchain - try multiple locations
+if [ -d "/opt/ALTERA/quartuspro/25.3.1/riscfree/toolchain/riscv32-unknown-elf/bin" ]; then
+    TOOLCHAIN=/opt/ALTERA/quartuspro/25.3.1/riscfree/toolchain/riscv32-unknown-elf/bin
+    CROSS=riscv32-unknown-elf-
+elif [ -d "$HOME/riscv-tools/bin" ]; then
+    TOOLCHAIN=$HOME/riscv-tools/bin
+    CROSS=riscv64-unknown-elf-
+else
+    echo "Error: No RISC-V toolchain found"
+    exit 1
+fi
 export PATH=$TOOLCHAIN:$PATH
-
-CROSS=riscv32-unknown-elf-
 CFLAGS="-march=rv32ima -mabi=ilp32 -O2 -nostdlib -nostartfiles -ffreestanding -Ilib"
 LDFLAGS="-T src/link.ld -nostdlib"
 
