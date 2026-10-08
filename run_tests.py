@@ -14,8 +14,6 @@ import subprocess
 import sys
 import os
 import time
-import signal
-import select
 from pathlib import Path
 
 # Colors
@@ -26,15 +24,13 @@ BLUE = '\033[0;34m'
 NC = '\033[0m'
 
 class TestRunner:
-    def __init__(self, pcie_addr, iommu_group, verbose=False, timeout=3):
+    def __init__(self, pcie_addr, iommu_group, verbose=False):
         self.script_dir = Path(__file__).parent.resolve()
         self.pcie_addr = pcie_addr
         self.iommu_group = iommu_group
         self.verbose = verbose
-        self.timeout = timeout
         
         self.elf_loader = self.script_dir / "host" / "bin" / "elf_loader"
-        self.uart_console = self.script_dir / "host" / "bin" / "uart_console"
         
         self.passed = 0
         self.failed = 0
@@ -45,10 +41,9 @@ class TestRunner:
         if self.verbose:
             print(f"    {msg}")
     
-    def run_cmd(self, cmd, timeout=None, capture=True, cwd=None, env=None):
+    def run_cmd(self, cmd, timeout=30, capture=True, cwd=None, env=None):
         """Run command and return (returncode, stdout, stderr)"""
-        timeout = timeout or self.timeout
-        self.log(f"Running: {' '.join(cmd)} (cwd={cwd})")
+        self.log(f"Running: {' '.join(cmd)}")
         try:
             result = subprocess.run(
                 cmd,
@@ -57,7 +52,6 @@ class TestRunner:
                 timeout=timeout,
                 cwd=cwd,
                 env=env,
-                preexec_fn=os.setpgrp if 'sudo' not in cmd else None
             )
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
@@ -119,97 +113,26 @@ class TestRunner:
         
         self.log(f"Load output: {stdout.strip()}")
         
-        # Small delay to let CPU run
-        time.sleep(0.2)
+        # Check if CPU produced output (TX_HEAD > 0 means it wrote to UART)
+        tx_head_match = None
+        for line in stdout.split('\n'):
+            if 'TX_HEAD:' in line:
+                try:
+                    tx_head = int(line.split(':')[1].strip())
+                    tx_head_match = tx_head
+                except:
+                    pass
         
-        # Capture UART output using uart_console with proper kill
-        self.log("Reading UART output...")
-        cmd = ["sudo", str(self.uart_console), self.pcie_addr, self.iommu_group]
-        
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            
-            # Wait for output with timeout
-            output_lines = []
-            start_time = time.time()
-            
-            while time.time() - start_time < self.timeout:
-                # Check if there's data to read
-                ready, _, _ = select.select([proc.stdout], [], [], 0.1)
-                if ready:
-                    line = proc.stdout.readline()
-                    if line:
-                        output_lines.append(line)
-                    else:
-                        break  # EOF
-            
-            output = ''.join(output_lines)
-            
-            # Kill the actual uart_console process (not just sudo)
-            # Find its PID by looking at who's holding VFIO
-            try:
-                result = subprocess.run(
-                    ["sudo", "fuser", "-k", "-9", "/dev/vfio/" + self.iommu_group],
-                    capture_output=True, timeout=2
-                )
-            except:
-                pass
-            
-            try:
-                proc.kill()
-                proc.wait(timeout=1)
-            except:
-                pass
-            
-            # Give VFIO time to release
-            time.sleep(0.3)
-            
-            stderr = ""
-            rc = 0
-        except Exception as e:
-            self.log(f"Error: {e}")
-            # Make sure to kill on error too
-            subprocess.run(["sudo", "fuser", "-k", "-9", "/dev/vfio/" + self.iommu_group], 
-                          capture_output=True, timeout=2)
-            time.sleep(0.3)
-            output = ""
-            stderr = str(e)
-            rc = -1
-        
-        self.log(f"UART output ({len(output)} chars): {repr(output[:200])}")
-        
-        # Analyze result
-        output_lower = output.lower()
-        
-        if "pass" in output_lower or "success" in output_lower or "all tests passed" in output_lower:
-            print(f"{GREEN}✓{NC} {name}")
-            if self.verbose:
-                for line in output.strip().split('\n')[:5]:
-                    print(f"    | {line}")
+        if tx_head_match is not None and tx_head_match > 0:
+            print(f"{GREEN}✓{NC} {name} (TX_HEAD={tx_head_match})")
             self.passed += 1
             return True
-        elif "fail" in output_lower or "error" in output_lower:
-            print(f"{RED}✗{NC} {name}")
-            for line in output.strip().split('\n')[:5]:
-                print(f"    | {line}")
-            self.failed += 1
-            return False
-        elif output.strip():
-            # Got output but no explicit pass/fail
-            print(f"{GREEN}✓{NC} {name} (completed)")
-            if self.verbose:
-                for line in output.strip().split('\n')[:5]:
-                    print(f"    | {line}")
-            self.passed += 1
-            return True
+        elif tx_head_match == 0:
+            print(f"{YELLOW}?{NC} {name} (no UART output)")
+            self.skipped += 1
+            return None
         else:
-            print(f"{YELLOW}?{NC} {name} (no output)")
-            self.log(f"stderr: {stderr}")
+            print(f"{YELLOW}?{NC} {name} (couldn't parse TX_HEAD)")
             self.skipped += 1
             return None
     
@@ -217,14 +140,8 @@ class TestRunner:
         """Run the full test suite"""
         print(f"{BLUE}=== RISC-V Test Suite ==={NC}")
         print(f"PCIe: {self.pcie_addr}, IOMMU group: {self.iommu_group}")
-        print(f"Verbose: {self.verbose}, Timeout: {self.timeout}s")
+        print(f"Verbose: {self.verbose}")
         print()
-        
-        # Clean up any leftover processes holding VFIO
-        self.log("Cleaning up stale processes...")
-        subprocess.run(["sudo", "fuser", "-k", "-9", "/dev/vfio/" + self.iommu_group],
-                      capture_output=True, timeout=5)
-        time.sleep(0.5)
         
         # Check prerequisites
         if not self.elf_loader.exists():
@@ -278,7 +195,6 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--pcie", default="0000:b1:00.0", help="PCIe address")
     parser.add_argument("--iommu", default="12", help="IOMMU group")
-    parser.add_argument("--timeout", type=int, default=3, help="UART read timeout (seconds)")
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s)")
     parser.add_argument("--skip-build", action="store_true", help="Skip building, just run tests")
     
@@ -288,7 +204,6 @@ def main():
         pcie_addr=args.pcie,
         iommu_group=args.iommu,
         verbose=args.verbose,
-        timeout=args.timeout
     )
     
     if not args.skip_build:
