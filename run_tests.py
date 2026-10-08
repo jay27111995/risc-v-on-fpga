@@ -102,11 +102,13 @@ class TestRunner:
     def cleanup_vfio(self):
         """Kill any processes holding VFIO and wait for release"""
         self.log("Cleaning up VFIO...")
-        subprocess.run(["sudo", "pkill", "-9", "-f", "uart_console"], 
+        # Kill by name
+        subprocess.run(["sudo", "killall", "-9", "uart_console"], 
                       capture_output=True, timeout=2)
+        # Kill by VFIO handle
         subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{self.iommu_group}"],
                       capture_output=True, timeout=2)
-        time.sleep(0.5)
+        time.sleep(0.3)
     
     def run_test(self, name):
         """Run a single test and return True if passed"""
