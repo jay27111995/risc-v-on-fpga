@@ -1,6 +1,6 @@
 // atomic_test.c - Test LR.W/SC.W atomic instructions (A extension)
 
-#include "libc.h"
+#include "stdio.h"
 
 // Inline assembly for LR.W and SC.W
 // LR.W rd, (rs1) - Load-Reserved Word
