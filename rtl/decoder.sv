@@ -52,6 +52,8 @@ module decoder (
     output logic        wfi,         // WFI instruction (wait for interrupt)?
     output logic        fence,       // FENCE instruction (memory barrier)?
     output logic        fence_i,     // FENCE.I instruction (instruction barrier)?
+    output logic        lr_w,        // LR.W instruction (load-reserved)?
+    output logic        sc_w,        // SC.W instruction (store-conditional)?
 
     // CSR signals
     output logic        csr_en,      // CSR instruction?
@@ -86,6 +88,7 @@ localparam OP_LUI     = 7'b0110111;  // LUI
 localparam OP_AUIPC   = 7'b0010111;  // AUIPC
 localparam OP_SYSTEM  = 7'b1110011;  // ECALL, EBREAK, CSR, WFI
 localparam OP_MISCMEM = 7'b0001111;  // FENCE, FENCE.I
+localparam OP_AMO     = 7'b0101111;  // LR.W, SC.W (A extension)
 
 // Decode logic
 always_comb begin
@@ -108,6 +111,8 @@ always_comb begin
     wfi = 0;
     fence = 0;
     fence_i = 0;
+    lr_w = 0;
+    sc_w = 0;
     csr_en = 0;
     csr_op = 2'b00;
     csr_imm = 0;
@@ -276,6 +281,35 @@ always_comb begin
                 3'b001: fence_i = 1;  // FENCE.I - instruction fetch barrier (NOP)
                 default: ;            // Unknown, treat as NOP
             endcase
+        end
+
+        OP_AMO: begin  // A extension: LR.W, SC.W
+            // AMO format: [31:27]=funct5 [26:25]=aq,rl [24:20]=rs2 [19:15]=rs1 [14:12]=funct3 [11:7]=rd [6:0]=opcode
+            // LR.W:  funct5=00010, rs2=00000, funct3=010
+            // SC.W:  funct5=00011, funct3=010
+            if (funct3 == 3'b010) begin  // .W (word)
+                case (funct7[6:2])  // funct5
+                    5'b00010: begin  // LR.W
+                        lr_w = 1;
+                        reg_write = 1;
+                        mem_read = 1;
+                        mem_op = 3'b010;  // Word
+                        alu_op = 5'b00000;  // ADD (rs1 + 0)
+                        alu_src = 1;
+                        imm = 32'b0;  // Address is just rs1
+                    end
+                    5'b00011: begin  // SC.W
+                        sc_w = 1;
+                        reg_write = 1;  // rd gets success/fail (0/1)
+                        mem_write = 1;
+                        mem_op = 3'b010;  // Word
+                        alu_op = 5'b00000;  // ADD (rs1 + 0)
+                        alu_src = 1;
+                        imm = 32'b0;  // Address is just rs1
+                    end
+                    default: ;  // Other AMO ops not implemented
+                endcase
+            end
         end
 
         default: begin

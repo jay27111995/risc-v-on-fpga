@@ -307,13 +307,15 @@ module riscv_soc (
     logic        id_valid;
     logic [31:0] mem_branch_target;
     logic [4:0]  mem_rd, ex1_rs1, ex1_rs2;
+    logic        ex1_sc_w, ex2_sc_w, mem_sc_w;  // SC.W signals for hazard detection
 
-    // Load-use hazard: stall when a load is followed by dependent instruction
-    wire hazard_load_use_ex1 = ex1_mem_read && ex1_valid && (ex1_rd != 5'd0) &&
+    // Load/SC.W-use hazard: stall when a load or SC.W is followed by dependent instruction
+    // SC.W result (like loads) is only available in WB stage, not earlier
+    wire hazard_load_use_ex1 = (ex1_mem_read || ex1_sc_w) && ex1_valid && (ex1_rd != 5'd0) &&
                                ((ex1_rd == id_rs1) || (ex1_rd == id_rs2)) && id_valid;
-    wire hazard_load_use_ex2 = ex2_mem_read && ex2_valid && (ex2_rd != 5'd0) &&
+    wire hazard_load_use_ex2 = (ex2_mem_read || ex2_sc_w) && ex2_valid && (ex2_rd != 5'd0) &&
                                ((ex2_rd == id_rs1) || (ex2_rd == id_rs2)) && id_valid;
-    wire hazard_load_use_mem = mem_mem_read && mem_valid && (mem_rd != 5'd0) &&
+    wire hazard_load_use_mem = (mem_mem_read || mem_sc_w) && mem_valid && (mem_rd != 5'd0) &&
                                ((mem_rd == id_rs1) || (mem_rd == id_rs2)) && id_valid;
 
     // Load data wait: stall 3 cycles for Block RAM read latency
@@ -598,7 +600,7 @@ module riscv_soc (
     logic [11:0] ex1_csr_addr;
     logic        ex1_mret;  // MRET instruction
     logic        ex1_lr_w;  // LR.W instruction
-    logic        ex1_sc_w;  // SC.W instruction
+    // ex1_sc_w is forward-declared above for hazard detection
 
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -682,12 +684,14 @@ module riscv_soc (
     logic [31:0] wb_rd_data;
 
     // Forwarding from EX2 stage (just computed ALU result)
-    wire fwd_ex2_rs1 = ex2_reg_write && !ex2_mem_read && (ex2_rd != 5'd0) && (ex2_rd == ex1_rs1);
-    wire fwd_ex2_rs2 = ex2_reg_write && !ex2_mem_read && (ex2_rd != 5'd0) && (ex2_rd == ex1_rs2);
+    // Exclude loads and SC.W - their result isn't ready until WB
+    wire fwd_ex2_rs1 = ex2_reg_write && !ex2_mem_read && !ex2_sc_w && (ex2_rd != 5'd0) && (ex2_rd == ex1_rs1);
+    wire fwd_ex2_rs2 = ex2_reg_write && !ex2_mem_read && !ex2_sc_w && (ex2_rd != 5'd0) && (ex2_rd == ex1_rs2);
 
     // Forwarding from MEM stage
-    wire fwd_mem_rs1 = mem_reg_write && !mem_mem_read && (mem_rd != 5'd0) && (mem_rd == ex1_rs1) && !fwd_ex2_rs1;
-    wire fwd_mem_rs2 = mem_reg_write && !mem_mem_read && (mem_rd != 5'd0) && (mem_rd == ex1_rs2) && !fwd_ex2_rs2;
+    // Exclude loads and SC.W - their result isn't ready until WB
+    wire fwd_mem_rs1 = mem_reg_write && !mem_mem_read && !mem_sc_w && (mem_rd != 5'd0) && (mem_rd == ex1_rs1) && !fwd_ex2_rs1;
+    wire fwd_mem_rs2 = mem_reg_write && !mem_mem_read && !mem_sc_w && (mem_rd != 5'd0) && (mem_rd == ex1_rs2) && !fwd_ex2_rs2;
 
     // Forwarding from WB stage (now includes loads - data is in wb_rd_data)
     wire fwd_wb_rs1  = wb_reg_write && (wb_rd != 5'd0) && (wb_rd == ex1_rs1) && !fwd_ex2_rs1 && !fwd_mem_rs1;
@@ -726,7 +730,7 @@ module riscv_soc (
     logic [31:0] ex2_csr_wdata;  // Data to write to CSR
     logic        ex2_mret;       // MRET instruction
     logic        ex2_lr_w;       // LR.W instruction
-    logic        ex2_sc_w;       // SC.W instruction
+    // ex2_sc_w is forward-declared above for hazard detection
 
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -966,7 +970,7 @@ module riscv_soc (
     logic [31:0] mem_csr_rdata;
     logic        mem_mret;
     logic        mem_lr_w;
-    logic        mem_sc_w;
+    // mem_sc_w is forward-declared above for hazard detection
 
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
