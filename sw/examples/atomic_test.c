@@ -44,16 +44,3 @@ int main(void) {
     puts("\n===END===\n");
     return 0;
 }
-    
-    if (acquired) {
-        puts("Spinlock acquire: PASS\n");
-        // Release lock
-        lock = 0;
-        puts("Lock released\n");
-    } else {
-        puts("Spinlock acquire: FAIL\n");
-    }
-    
-    puts("\n===END===\n");
-    return 0;
-}
