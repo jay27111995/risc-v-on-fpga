@@ -25,7 +25,7 @@ BLUE = '\033[0;34m'
 NC = '\033[0m'
 
 class TestRunner:
-    def __init__(self, pcie_addr, iommu_group, verbose=False, timeout=5):
+    def __init__(self, pcie_addr, iommu_group, verbose=False, timeout=2):
         self.script_dir = Path(__file__).parent.resolve()
         self.pcie_addr = pcie_addr
         self.iommu_group = iommu_group
@@ -35,8 +35,11 @@ class TestRunner:
         self.elf_loader = self.script_dir / "host" / "bin" / "elf_loader"
         self.uart_console = self.script_dir / "host" / "bin" / "uart_console"
         
-        # End markers that indicate test completed
-        self.end_markers = ["DONE", "ALL TESTS PASSED", "HALTING", "Test Complete"]
+        # End markers that indicate test completed (case insensitive check)
+        self.end_markers = [
+            "Done!", "ALL TESTS PASSED", "HALTING", 
+            "Test Complete", "=== Results", "=== WFI Test",
+        ]
         
         self.passed = 0
         self.failed = 0
@@ -272,7 +275,7 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--pcie", default="0000:b1:00.0", help="PCIe address")
     parser.add_argument("--iommu", default="12", help="IOMMU group")
-    parser.add_argument("--timeout", type=int, default=5, help="Max seconds to wait for test completion")
+    parser.add_argument("--timeout", type=int, default=2, help="Max seconds to wait for test completion")
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s)")
     parser.add_argument("--skip-build", action="store_true", help="Skip building, just run tests")
     
