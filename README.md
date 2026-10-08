@@ -2,11 +2,11 @@
 
 > **Note**: This project was developed with AI assistance (Claude/Kiro).
 
-A complete RV32IM RISC-V CPU with PCIe BAR interface and virtual UART, targeting Intel Agilex 7 FPGA.
+A complete RV32IMA RISC-V CPU with PCIe BAR interface and virtual UART, targeting Intel Agilex 7 FPGA.
 
 ## Status
 
-- **RV32IM CPU**: ✅ Working (all base + M extension instructions)
+- **RV32IMA CPU**: ✅ Working (base + M extension + A extension)
 - **Machine Mode**: ✅ Working (CSRs, timer interrupts, traps, WFI)
 
 ## TODO
@@ -65,13 +65,23 @@ Tests print `===END===` as end marker. The script reads UART output until it see
 
 | Feature | Value |
 |---------|-------|
-| ISA | RV32IM |
+| ISA | RV32IMA |
 | Pipeline | 6-stage (IF→ID→EX1→EX2→MEM→WB) |
 | Clock | 250 MHz |
 | IMEM | 128 KB |
 | DMEM | 32 KB |
 | Target | Intel Agilex 7 (AGIB027R29A1E1VB) |
 | Interface | PCIe Gen4 x16 |
+
+## ISA Support
+
+| Extension | Instructions | Status |
+|-----------|--------------|--------|
+| RV32I | Base integer (ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU, LW, SW, BEQ, BNE, BLT, BGE, JAL, JALR, LUI, AUIPC) | ✅ |
+| M | Multiply/Divide (MUL, MULH, MULHSU, MULHU, DIV, DIVU, REM, REMU) | ✅ |
+| A | Atomics (LR.W, SC.W) | ✅ |
+| Zicsr | CSR access (CSRRW, CSRRS, CSRRC, CSRRWI, CSRRSI, CSRRCI) | ✅ |
+| Machine Mode | ECALL, EBREAK, MRET, WFI, FENCE | ✅ |
 
 ## License
 
