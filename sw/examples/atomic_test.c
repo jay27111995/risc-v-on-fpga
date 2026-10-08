@@ -24,6 +24,12 @@ volatile int lock = 0;
 int main(void) {
     puts("Atomic test (LR.W/SC.W)\n");
     
+    // First, verify basic LW works
+    puts("Verifying LW...\n");
+    int lw_val = shared_var;  // Regular load
+    print_int(lw_val);
+    puts(" = LW value (should be 100)\n");
+    
     // Test 1: Simple LR/SC sequence (should succeed)
     puts("Test 1: Simple LR/SC...\n");
     int val = lr_w(&shared_var);
