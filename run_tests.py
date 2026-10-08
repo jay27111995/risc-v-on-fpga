@@ -96,6 +96,15 @@ class TestRunner:
             print(stdout)
         return True
     
+    def cleanup_vfio(self):
+        """Kill any processes holding VFIO and wait for release"""
+        self.log("Cleaning up VFIO...")
+        subprocess.run(["sudo", "pkill", "-9", "-f", "uart_console"], 
+                      capture_output=True, timeout=2)
+        subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{self.iommu_group}"],
+                      capture_output=True, timeout=2)
+        time.sleep(0.5)
+    
     def run_test(self, name):
         """Run a single test and return True if passed"""
         elf = self.script_dir / "sw" / "build" / f"{name}.elf"
@@ -154,6 +163,7 @@ class TestRunner:
         """Read uart_console output until end marker or timeout"""
         cmd = ["sudo", str(self.uart_console), self.pcie_addr, self.iommu_group]
         
+        proc = None
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -185,24 +195,20 @@ class TestRunner:
                     if found_end:
                         break
             
-            # Kill uart_console
-            subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{self.iommu_group}"],
-                          capture_output=True, timeout=2)
-            proc.kill()
-            try:
-                proc.wait(timeout=1)
-            except:
-                pass
-            time.sleep(0.5)  # Wait for VFIO to release
-            
             return ''.join(output_lines)
             
         except Exception as e:
             self.log(f"UART read error: {e}")
-            subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{self.iommu_group}"],
-                          capture_output=True, timeout=2)
-            time.sleep(0.5)
             return ""
+        finally:
+            # Always cleanup
+            if proc:
+                proc.kill()
+                try:
+                    proc.wait(timeout=1)
+                except:
+                    pass
+            self.cleanup_vfio()
     
     def run_suite(self, tests=None):
         """Run the full test suite"""
@@ -210,6 +216,9 @@ class TestRunner:
         print(f"PCIe: {self.pcie_addr}, IOMMU group: {self.iommu_group}")
         print(f"Verbose: {self.verbose}")
         print()
+        
+        # Cleanup any stale processes
+        self.cleanup_vfio()
         
         # Check prerequisites
         if not self.elf_loader.exists():
