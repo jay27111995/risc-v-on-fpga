@@ -42,16 +42,17 @@ class TestRunner:
         if self.verbose:
             print(f"    {msg}")
     
-    def run_cmd(self, cmd, timeout=None, capture=True):
+    def run_cmd(self, cmd, timeout=None, capture=True, cwd=None):
         """Run command and return (returncode, stdout, stderr)"""
         timeout = timeout or self.timeout
-        self.log(f"Running: {' '.join(cmd)}")
+        self.log(f"Running: {' '.join(cmd)} (cwd={cwd})")
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=capture,
                 text=True,
-                timeout=timeout
+                timeout=timeout,
+                cwd=cwd
             )
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
@@ -64,9 +65,9 @@ class TestRunner:
     def build_host(self):
         """Build host tools"""
         print(f"{YELLOW}[1/3] Building host tools...{NC}")
-        build_script = self.script_dir / "host" / "build.sh"
+        host_dir = self.script_dir / "host"
         
-        rc, stdout, stderr = self.run_cmd(["bash", str(build_script)], timeout=60)
+        rc, stdout, stderr = self.run_cmd(["bash", "build.sh"], timeout=60, cwd=host_dir)
         if rc != 0:
             print(f"{RED}✗ Host build failed{NC}")
             if self.verbose:
@@ -80,9 +81,9 @@ class TestRunner:
     def build_sw(self):
         """Build all SW examples"""
         print(f"{YELLOW}[2/3] Building SW examples...{NC}")
-        build_script = self.script_dir / "sw" / "build_all.sh"
+        sw_dir = self.script_dir / "sw"
         
-        rc, stdout, stderr = self.run_cmd(["bash", str(build_script)], timeout=120, capture=not self.verbose)
+        rc, stdout, stderr = self.run_cmd(["bash", "build_all.sh"], timeout=120, capture=not self.verbose, cwd=sw_dir)
         if self.verbose:
             print(stdout)
         return True
