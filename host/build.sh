@@ -36,9 +36,6 @@ gcc $CFLAGS $LIBS $OUT/test_programs.o -o $OUT/test_programs
 gcc $CFLAGS -c $SRC/uart_console.c -o $OUT/uart_console.o
 gcc $CFLAGS $LIBS $OUT/uart_console.o -o $OUT/uart_console
 
-gcc $CFLAGS -c $SRC/uart_read.c -o $OUT/uart_read.o
-gcc $CFLAGS $LIBS $OUT/uart_read.o -o $OUT/uart_read
-
 # Clean up object files
 rm -f $OUT/*.o
 
