@@ -31,7 +31,7 @@ class TestRunner:
         self.timeout = timeout
         
         self.elf_loader = self.script_dir / "host" / "bin" / "elf_loader"
-        self.uart_console = self.script_dir / "host" / "bin" / "uart_console"
+        self.uart_read = self.script_dir / "host" / "bin" / "uart_read"
         
         self.passed = 0
         self.failed = 0
@@ -119,9 +119,9 @@ class TestRunner:
         import time
         time.sleep(0.2)
         
-        # Capture UART output
+        # Capture UART output (use uart_read for one-shot read)
         self.log("Reading UART output...")
-        cmd = ["sudo", str(self.uart_console), self.pcie_addr, self.iommu_group]
+        cmd = ["sudo", str(self.uart_read), self.pcie_addr, self.iommu_group]
         rc, output, stderr = self.run_cmd(cmd, timeout=self.timeout)
         
         self.log(f"UART output ({len(output)} chars): {repr(output[:200])}")
