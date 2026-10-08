@@ -3,305 +3,197 @@
 RISC-V FPGA Test Suite
 
 Usage:
-    ./run_tests.py                     # defaults
+    ./run_tests.py                     # run all tests
     ./run_tests.py -v                  # verbose
-    ./run_tests.py --pcie 0000:b1:00.0 --iommu 12
-    ./run_tests.py --test ecall_test   # run single test
+    ./run_tests.py -t ecall_test       # single test
+    ./run_tests.py --skip-build        # skip building
 """
 
 import argparse
 import subprocess
-import sys
 import os
+import sys
 import time
-import select
 from pathlib import Path
+from multiprocessing import Process, Queue
+
+PCIE = "0000:b1:00.0"
+IOMMU = "12"
 
 # Colors
-RED = '\033[0;31m'
-GREEN = '\033[0;32m'
-YELLOW = '\033[0;33m'
-BLUE = '\033[0;34m'
-NC = '\033[0m'
+R = '\033[0;31m'
+G = '\033[0;32m'
+Y = '\033[0;33m'
+B = '\033[0;34m'
+N = '\033[0m'
 
-class TestRunner:
-    def __init__(self, pcie_addr, iommu_group, verbose=False, timeout=2):
-        self.script_dir = Path(__file__).parent.resolve()
-        self.pcie_addr = pcie_addr
-        self.iommu_group = iommu_group
-        self.verbose = verbose
-        self.timeout = timeout
+def cleanup():
+    """Kill any uart_console and release VFIO"""
+    subprocess.run(["sudo", "killall", "-9", "uart_console"], 
+                   capture_output=True, timeout=5)
+    subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{IOMMU}"],
+                   capture_output=True, timeout=5)
+    time.sleep(0.3)
+
+def load_elf(elf_path):
+    """Load ELF file to FPGA, return True if success"""
+    cmd = ["sudo", "host/bin/elf_loader", str(elf_path), PCIE, IOMMU]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return result.returncode == 0, result.stdout, result.stderr
+
+def read_uart(queue, timeout=2):
+    """Read uart_console output and put in queue. Run as separate process."""
+    cmd = ["sudo", "host/bin/uart_console", PCIE, IOMMU]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
-        self.elf_loader = self.script_dir / "host" / "bin" / "elf_loader"
-        self.uart_console = self.script_dir / "host" / "bin" / "uart_console"
+        lines = []
+        end_markers = ["Done!", "ALL TESTS PASSED", "HALTING", "Test Complete", 
+                       "=== Results", "=== WFI Test", "PASS:", "Hi!"]
         
-        # End markers that indicate test completed (case insensitive check)
-        self.end_markers = [
-            "Done!", "ALL TESTS PASSED", "HALTING", 
-            "Test Complete", "=== Results", "=== WFI Test",
-        ]
+        start = time.time()
+        while time.time() - start < timeout:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            lines.append(line)
+            # Check for end marker
+            if any(m in line for m in end_markers):
+                break
         
-        self.passed = 0
-        self.failed = 0
-        self.skipped = 0
-        
-    def log(self, msg):
-        """Print only in verbose mode"""
-        if self.verbose:
-            print(f"    {msg}")
+        proc.kill()
+        proc.wait()
+        queue.put(''.join(lines))
+    except Exception as e:
+        queue.put(f"ERROR: {e}")
+
+def run_test(name, verbose=False):
+    """Run a single test. Returns True/False/None for pass/fail/skip"""
+    elf = Path(f"sw/build/{name}.elf")
     
-    def run_cmd(self, cmd, timeout=30, capture=True, cwd=None, env=None):
-        """Run command and return (returncode, stdout, stderr)"""
-        self.log(f"Running: {' '.join(cmd)}")
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=capture,
-                text=True,
-                timeout=timeout,
-                cwd=cwd,
-                env=env,
-            )
-            return result.returncode, result.stdout, result.stderr
-        except subprocess.TimeoutExpired:
-            self.log("Command timed out")
-            return -1, "", "timeout"
-        except KeyboardInterrupt:
-            print(f"\n{YELLOW}Interrupted{NC}")
-            sys.exit(130)
-        except Exception as e:
-            self.log(f"Command failed: {e}")
-            return -1, "", str(e)
+    if not elf.exists():
+        print(f"{Y}⊘{N} {name} (not built)")
+        return None
     
-    def build_host(self):
-        """Build host tools"""
-        print(f"{YELLOW}[1/3] Building host tools...{NC}")
-        host_dir = self.script_dir / "host"
-        
-        rc, stdout, stderr = self.run_cmd(["bash", "build.sh"], timeout=60, cwd=host_dir)
-        if rc != 0:
-            print(f"{RED}✗ Host build failed{NC}")
-            if self.verbose:
-                print(f"    stdout: {stdout}")
-                print(f"    stderr: {stderr}")
-            return False
-        
-        print(f"{GREEN}✓ Host tools built{NC}")
-        return True
+    # Cleanup before test
+    cleanup()
     
-    def build_sw(self):
-        """Build all SW examples"""
-        print(f"{YELLOW}[2/3] Building SW examples...{NC}")
-        sw_dir = self.script_dir / "sw"
-        
-        rc, stdout, stderr = self.run_cmd(["bash", "build_all.sh"], timeout=120, capture=not self.verbose, cwd=sw_dir)
-        if self.verbose:
-            print(stdout)
-        return True
+    # Load ELF
+    ok, stdout, stderr = load_elf(elf)
+    if not ok:
+        print(f"{R}✗{N} {name} (load failed)")
+        if verbose:
+            print(f"    {stderr.strip()}")
+        return False
     
-    def cleanup_vfio(self):
-        """Kill any processes holding VFIO and wait for release"""
-        self.log("Cleaning up VFIO...")
-        # Kill by name
-        subprocess.run(["sudo", "killall", "-9", "uart_console"], 
-                      capture_output=True, timeout=2)
-        # Kill by VFIO handle
-        subprocess.run(["sudo", "fuser", "-k", "-9", f"/dev/vfio/{self.iommu_group}"],
-                      capture_output=True, timeout=2)
-        time.sleep(0.3)
+    # Read UART in separate process (so we can kill it reliably)
+    queue = Queue()
+    p = Process(target=read_uart, args=(queue, 2))
+    p.start()
+    p.join(timeout=3)
     
-    def run_test(self, name):
-        """Run a single test and return True if passed"""
-        elf = self.script_dir / "sw" / "build" / f"{name}.elf"
-        
-        if not elf.exists():
-            print(f"{YELLOW}⊘{NC} {name} (not built)")
-            self.skipped += 1
-            return None
-        
-        # Load ELF
-        self.log(f"Loading {elf}")
-        cmd = ["sudo", str(self.elf_loader), str(elf), self.pcie_addr, self.iommu_group]
-        rc, stdout, stderr = self.run_cmd(cmd, timeout=10)
-        
-        if rc != 0:
-            print(f"{RED}✗{NC} {name} (load failed)")
-            self.log(f"stdout: {stdout}")
-            self.log(f"stderr: {stderr}")
-            self.failed += 1
-            return False
-        
-        self.log(f"Load output: {stdout.strip()}")
-        
-        # Read UART output until we see end marker or timeout
-        output = self.read_uart_until_done()
-        
-        # Analyze result
-        output_lower = output.lower()
-        
-        if "fail" in output_lower or "error" in output_lower and "0 error" not in output_lower:
-            print(f"{RED}✗{NC} {name}")
+    if p.is_alive():
+        p.terminate()
+        p.join(timeout=1)
+    
+    # Cleanup after test
+    cleanup()
+    
+    # Get output
+    output = queue.get() if not queue.empty() else ""
+    
+    # Analyze
+    out_lower = output.lower()
+    if "fail" in out_lower and "0 error" not in out_lower:
+        print(f"{R}✗{N} {name}")
+        if verbose:
             for line in output.strip().split('\n')[-5:]:
                 print(f"    | {line}")
-            self.failed += 1
-            return False
-        elif "pass" in output_lower or "done" in output_lower:
-            print(f"{GREEN}✓{NC} {name}")
-            if self.verbose:
-                for line in output.strip().split('\n'):
-                    print(f"    | {line}")
-            self.passed += 1
-            return True
-        elif output.strip():
-            print(f"{GREEN}✓{NC} {name} (completed)")
-            if self.verbose:
-                for line in output.strip().split('\n')[-5:]:
-                    print(f"    | {line}")
-            self.passed += 1
-            return True
-        else:
-            print(f"{YELLOW}?{NC} {name} (no output)")
-            self.skipped += 1
-            return None
-    
-    def read_uart_until_done(self):
-        """Read uart_console output until end marker or timeout"""
-        cmd = ["sudo", str(self.uart_console), self.pcie_addr, self.iommu_group]
-        
-        proc = None
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            
-            output_lines = []
-            start_time = time.time()
-            found_end = False
-            
-            while time.time() - start_time < self.timeout:
-                ready, _, _ = select.select([proc.stdout], [], [], 0.1)
-                if ready:
-                    line = proc.stdout.readline()
-                    if not line:
-                        break  # EOF
-                    output_lines.append(line)
-                    self.log(f"UART: {line.rstrip()}")
-                    
-                    # Check for end marker
-                    line_upper = line.upper()
-                    for marker in self.end_markers:
-                        if marker in line_upper:
-                            found_end = True
-                            break
-                    
-                    if found_end:
-                        break
-            
-            return ''.join(output_lines)
-            
-        except Exception as e:
-            self.log(f"UART read error: {e}")
-            return ""
-        finally:
-            # Always cleanup
-            if proc:
-                proc.kill()
-                try:
-                    proc.wait(timeout=1)
-                except:
-                    pass
-            self.cleanup_vfio()
-    
-    def run_suite(self, tests=None):
-        """Run the full test suite"""
-        print(f"{BLUE}=== RISC-V Test Suite ==={NC}")
-        print(f"PCIe: {self.pcie_addr}, IOMMU group: {self.iommu_group}")
-        print(f"Verbose: {self.verbose}")
-        print()
-        
-        # Cleanup any stale processes
-        self.cleanup_vfio()
-        
-        # Check prerequisites
-        if not self.elf_loader.exists():
-            print(f"{RED}Error: elf_loader not found at {self.elf_loader}{NC}")
-            print("Run build first or check path")
-            return False
-        
-        # Test groups
-        mmode_tests = ["ecall_test", "timer_int_test", "wfi_test", "fence_test"]
-        csr_tests = ["csr_test", "csr_test2", "csr_hazard_test"]
-        general_tests = ["hello_sum", "sum", "sum2", "factorial", "sort_test", 
-                        "string_test", "linkedlist_test", "tree_test", "uart_test", "hello_short"]
-        
-        if tests:
-            # Run specific tests
-            print("--- Selected tests ---")
-            for t in tests:
-                self.run_test(t)
-        else:
-            # Run all tests
-            print("--- M-mode tests ---")
-            for t in mmode_tests:
-                self.run_test(t)
-            print()
-            
-            print("--- CSR tests ---")
-            for t in csr_tests:
-                self.run_test(t)
-            print()
-            
-            print("--- General tests ---")
-            for t in general_tests:
-                self.run_test(t)
-        
-        print()
-        print("=" * 40)
-        print(f"Results: {GREEN}{self.passed} passed{NC}, {RED}{self.failed} failed{NC}, {YELLOW}{self.skipped} skipped{NC}")
-        
-        if self.failed == 0 and self.passed > 0:
-            print(f"{GREEN}All tests passed!{NC}")
-            return True
         return False
+    elif output.strip():
+        print(f"{G}✓{N} {name}")
+        if verbose:
+            for line in output.strip().split('\n')[-5:]:
+                print(f"    | {line}")
+        return True
+    else:
+        print(f"{Y}?{N} {name} (no output)")
+        return None
 
+def build_host():
+    """Build host tools"""
+    print(f"{Y}[1/3] Building host tools...{N}")
+    result = subprocess.run(["bash", "build.sh"], cwd="host", capture_output=True, timeout=60)
+    if result.returncode != 0:
+        print(f"{R}✗ Host build failed{N}")
+        return False
+    print(f"{G}✓ Host tools built{N}")
+    return True
+
+def build_sw():
+    """Build all SW"""
+    print(f"{Y}[2/3] Building SW...{N}")
+    subprocess.run(["bash", "build_all.sh"], cwd="sw", timeout=120)
+    return True
 
 def main():
-    # Handle Ctrl+C gracefully
-    import signal
-    signal.signal(signal.SIGINT, lambda s, f: sys.exit(130))
-    
     parser = argparse.ArgumentParser(description="RISC-V FPGA Test Suite")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    parser.add_argument("--pcie", default="0000:b1:00.0", help="PCIe address")
-    parser.add_argument("--iommu", default="12", help="IOMMU group")
-    parser.add_argument("--timeout", type=int, default=2, help="Max seconds to wait for test completion")
-    parser.add_argument("--test", "-t", action="append", help="Run specific test(s)")
-    parser.add_argument("--skip-build", action="store_true", help="Skip building, just run tests")
-    
+    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("-t", "--test", action="append", help="Run specific test(s)")
+    parser.add_argument("--skip-build", action="store_true")
     args = parser.parse_args()
     
-    runner = TestRunner(
-        pcie_addr=args.pcie,
-        iommu_group=args.iommu,
-        verbose=args.verbose,
-        timeout=args.timeout,
-    )
+    os.chdir(Path(__file__).parent)
     
     if not args.skip_build:
-        if not runner.build_host():
+        if not build_host():
             sys.exit(1)
-        runner.build_sw()
+        build_sw()
         print()
     
-    print(f"{YELLOW}[3/3] Running tests on FPGA...{NC}")
+    print(f"{Y}[3/3] Running tests...{N}")
     print()
     
-    success = runner.run_suite(tests=args.test)
-    sys.exit(0 if success else 1)
-
+    # Initial cleanup
+    cleanup()
+    
+    # Test lists
+    mmode = ["ecall_test", "timer_int_test", "wfi_test", "fence_test"]
+    csr = ["csr_test", "csr_test2", "csr_hazard_test"]
+    general = ["hello_sum", "sum", "sum2", "factorial", "sort_test",
+               "string_test", "linkedlist_test", "tree_test", "uart_test", "hello_short"]
+    
+    passed = failed = skipped = 0
+    
+    if args.test:
+        tests = args.test
+    else:
+        tests = mmode + csr + general
+        print("--- M-mode tests ---")
+    
+    for i, t in enumerate(tests):
+        if not args.test:
+            if t == csr[0]:
+                print("\n--- CSR tests ---")
+            elif t == general[0]:
+                print("\n--- General tests ---")
+        
+        result = run_test(t, args.verbose)
+        if result is True:
+            passed += 1
+        elif result is False:
+            failed += 1
+        else:
+            skipped += 1
+    
+    print()
+    print("=" * 40)
+    print(f"Results: {G}{passed} passed{N}, {R}{failed} failed{N}, {Y}{skipped} skipped{N}")
+    
+    if failed == 0 and passed > 0:
+        print(f"{G}All tests passed!{N}")
+    
+    sys.exit(0 if failed == 0 else 1)
 
 if __name__ == "__main__":
     main()
