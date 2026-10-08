@@ -52,12 +52,16 @@ class TestRunner:
                 capture_output=capture,
                 text=True,
                 timeout=timeout,
-                cwd=cwd
+                cwd=cwd,
+                preexec_fn=os.setpgrp if 'sudo' not in cmd else None
             )
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
             self.log("Command timed out")
             return -1, "", "timeout"
+        except KeyboardInterrupt:
+            print(f"\n{YELLOW}Interrupted{NC}")
+            sys.exit(130)
         except Exception as e:
             self.log(f"Command failed: {e}")
             return -1, "", str(e)
@@ -203,6 +207,10 @@ class TestRunner:
 
 
 def main():
+    # Handle Ctrl+C gracefully
+    import signal
+    signal.signal(signal.SIGINT, lambda s, f: sys.exit(130))
+    
     parser = argparse.ArgumentParser(description="RISC-V FPGA Test Suite")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--pcie", default="0000:b1:00.0", help="PCIe address")
