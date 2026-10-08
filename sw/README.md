@@ -39,6 +39,7 @@ Output: `build/hello_sum.elf`
 | `wfi_test.c` | Wait-for-interrupt test |
 | `fence_test.c` | FENCE/FENCE.I test |
 | `csr_test.c` | CSR read/write tests |
+| `atomic_test.c` | LR.W/SC.W atomic tests |
 
 ## Writing Programs
 
@@ -84,3 +85,10 @@ int main(void) {
 - No floating point
 - No file I/O (fopen returns NULL)
 - ~128KB code, ~32KB data max
+
+## ISA
+
+Programs are compiled for RV32IMA:
+- RV32I base integer instructions
+- M extension (multiply/divide)
+- A extension (LR.W/SC.W atomics)
