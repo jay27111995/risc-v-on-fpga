@@ -159,6 +159,7 @@ def main():
     # Test lists
     mmode = ["ecall_test", "timer_int_test", "wfi_test", "fence_test"]
     csr = ["csr_test", "csr_test2", "csr_hazard_test"]
+    atomic = ["atomic_test"]
     general = ["hello_sum", "sum", "sum2", "factorial", "sort_test",
                "string_test", "linkedlist_test", "tree_test", "uart_test", "hello_short"]
     
@@ -167,13 +168,15 @@ def main():
     if args.test:
         tests = args.test
     else:
-        tests = mmode + csr + general
+        tests = mmode + csr + atomic + general
         print("--- M-mode tests ---")
     
     for i, t in enumerate(tests):
         if not args.test:
             if t == csr[0]:
                 print("\n--- CSR tests ---")
+            elif t == atomic[0]:
+                print("\n--- Atomic tests ---")
             elif t == general[0]:
                 print("\n--- General tests ---")
         
