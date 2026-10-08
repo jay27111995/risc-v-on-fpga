@@ -42,7 +42,7 @@ class TestRunner:
         if self.verbose:
             print(f"    {msg}")
     
-    def run_cmd(self, cmd, timeout=None, capture=True, cwd=None):
+    def run_cmd(self, cmd, timeout=None, capture=True, cwd=None, env=None):
         """Run command and return (returncode, stdout, stderr)"""
         timeout = timeout or self.timeout
         self.log(f"Running: {' '.join(cmd)} (cwd={cwd})")
@@ -53,6 +53,7 @@ class TestRunner:
                 text=True,
                 timeout=timeout,
                 cwd=cwd,
+                env=env,
                 preexec_fn=os.setpgrp if 'sudo' not in cmd else None
             )
             return result.returncode, result.stdout, result.stderr
@@ -121,8 +122,10 @@ class TestRunner:
         
         # Capture UART output (use uart_read for one-shot read)
         self.log("Reading UART output...")
-        cmd = ["sudo", str(self.uart_read), self.pcie_addr, self.iommu_group]
-        rc, output, stderr = self.run_cmd(cmd, timeout=self.timeout)
+        env = os.environ.copy()
+        env["VFIO_QUIET"] = "1"
+        cmd = ["sudo", "-E", str(self.uart_read), self.pcie_addr, self.iommu_group]
+        rc, output, stderr = self.run_cmd(cmd, timeout=self.timeout, env=env)
         
         self.log(f"UART output ({len(output)} chars): {repr(output[:200])}")
         

@@ -147,7 +147,10 @@ int vfio_init(const char *pci_addr, int iommu_group) {
   }
 
   bar_size = region_info.size;
-  printf("BAR2 mapped at %p, size %zu bytes\n", (void *)bar64, bar_size);
+  // Only print if not running in quiet mode (for uart_read)
+  if (getenv("VFIO_QUIET") == NULL) {
+    printf("BAR2 mapped at %p, size %zu bytes\n", (void *)bar64, bar_size);
+  }
   return 0;
 }
 
