@@ -40,6 +40,27 @@ sudo host/bin/elf_loader sw/build/hello_sum.elf 0000:b1:00.0 12
 sudo host/bin/uart_console 0000:b1:00.0 12
 ```
 
+## Running Tests
+
+```bash
+# Run all tests (builds host tools and SW, then runs tests)
+./run_tests.py
+
+# Skip build, just run tests
+./run_tests.py --skip-build
+
+# Run specific test
+./run_tests.py -t ecall_test
+
+# Verbose output
+./run_tests.py -v -t ecall_test
+
+# Multiple specific tests
+./run_tests.py -t ecall_test -t wfi_test
+```
+
+Tests print `===END===` as end marker. The script reads UART output until it sees this marker.
+
 ## Specs
 
 | Feature | Value |
