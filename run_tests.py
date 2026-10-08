@@ -132,11 +132,9 @@ class TestRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                preexec_fn=os.setsid  # Create new process group for clean kill
             )
             
             # Wait for output with timeout
-            import select
             output_lines = []
             start_time = time.time()
             
@@ -152,19 +150,18 @@ class TestRunner:
             
             output = ''.join(output_lines)
             
-            # Kill the process group
-            import signal
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                proc.wait(timeout=1)
-            except:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                proc.wait(timeout=1)
+            # Kill uart_console (runs as root, need sudo kill)
+            subprocess.run(["sudo", "pkill", "-f", "uart_console"], 
+                          capture_output=True, timeout=2)
+            proc.wait(timeout=1)
             
             stderr = ""
             rc = 0
         except Exception as e:
             self.log(f"Error: {e}")
+            # Make sure to kill on error too
+            subprocess.run(["sudo", "pkill", "-f", "uart_console"], 
+                          capture_output=True, timeout=2)
             output = ""
             stderr = str(e)
             rc = -1
