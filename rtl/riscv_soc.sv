@@ -461,6 +461,8 @@ module riscv_soc (
         .wfi       (id_wfi),
         .fence     (id_fence),
         .fence_i   (id_fence_i),
+        .lr_w      (id_lr_w),
+        .sc_w      (id_sc_w),
         .csr_en    (id_csr_en),
         .csr_op    (id_csr_op),
         .csr_imm   (id_csr_imm),
@@ -472,6 +474,8 @@ module riscv_soc (
     logic id_wfi;
     logic id_fence;
     logic id_fence_i;
+    logic id_lr_w;
+    logic id_sc_w;
 
     logic [31:0] id_rs1_data, id_rs2_data;
 
@@ -593,6 +597,8 @@ module riscv_soc (
     logic        ex1_csr_imm;
     logic [11:0] ex1_csr_addr;
     logic        ex1_mret;  // MRET instruction
+    logic        ex1_lr_w;  // LR.W instruction
+    logic        ex1_sc_w;  // SC.W instruction
 
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -607,6 +613,8 @@ module riscv_soc (
             ex1_ebreak    <= 1'b0;
             ex1_csr_en    <= 1'b0;
             ex1_mret      <= 1'b0;
+            ex1_lr_w      <= 1'b0;
+            ex1_sc_w      <= 1'b0;
         end else if (mul_stall || div_stall || hazard_load_data) begin
             // During multiply/divide/load-data stall: hold current values (don't advance or invalidate)
             // This preserves the instruction waiting in EX1
@@ -623,6 +631,8 @@ module riscv_soc (
             ex1_ebreak    <= 1'b0;
             ex1_csr_en    <= 1'b0;
             ex1_mret      <= 1'b0;
+            ex1_lr_w      <= 1'b0;
+            ex1_sc_w      <= 1'b0;
         end else if (cpu_running) begin
             ex1_pc        <= id_pc;
             ex1_rs1_data  <= id_rs1_data;
@@ -649,6 +659,8 @@ module riscv_soc (
             ex1_csr_imm   <= id_csr_imm;
             ex1_csr_addr  <= id_csr_addr;
             ex1_mret      <= is_mret      && id_valid;
+            ex1_lr_w      <= id_lr_w      && id_valid;
+            ex1_sc_w      <= id_sc_w      && id_valid;
             ex1_valid     <= id_valid;
         end
     end
@@ -713,6 +725,8 @@ module riscv_soc (
     logic [11:0] ex2_csr_addr;
     logic [31:0] ex2_csr_wdata;  // Data to write to CSR
     logic        ex2_mret;       // MRET instruction
+    logic        ex2_lr_w;       // LR.W instruction
+    logic        ex2_sc_w;       // SC.W instruction
 
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -727,6 +741,8 @@ module riscv_soc (
             ex2_ebreak    <= 1'b0;
             ex2_csr_en    <= 1'b0;
             ex2_mret      <= 1'b0;
+            ex2_lr_w      <= 1'b0;
+            ex2_sc_w      <= 1'b0;
         end else if (cpu_running && !hazard_load_data && !mul_stall && !div_stall) begin
             ex2_pc        <= ex1_pc;
             ex2_alu_a     <= ex1_fwd_rs1;
@@ -751,6 +767,8 @@ module riscv_soc (
             ex2_csr_imm   <= ex1_csr_imm;
             ex2_csr_addr  <= ex1_csr_addr;
             ex2_mret      <= ex1_mret;
+            ex2_lr_w      <= ex1_lr_w;
+            ex2_sc_w      <= ex1_sc_w;
             // CSR write data: use immediate or rs1 (with forwarding)
             ex2_csr_wdata <= ex1_csr_imm ? ex1_imm : ex1_fwd_rs1;
             ex2_valid     <= ex1_valid;
@@ -947,6 +965,8 @@ module riscv_soc (
     logic [31:0] mem_csr_wdata;
     logic [31:0] mem_csr_rdata;
     logic        mem_mret;
+    logic        mem_lr_w;
+    logic        mem_sc_w;
 
     always_ff @(posedge clk) begin
         if (cpu_rst || flush) begin
@@ -959,6 +979,8 @@ module riscv_soc (
             mem_ebreak    <= 1'b0;
             mem_csr_en    <= 1'b0;
             mem_mret      <= 1'b0;
+            mem_lr_w      <= 1'b0;
+            mem_sc_w      <= 1'b0;
         end else if (cpu_running && !hazard_load_data && !mul_stall && !div_stall) begin
             // Normal advance from EX2 to MEM
             mem_alu_result <= ex2_result;
@@ -984,6 +1006,8 @@ module riscv_soc (
             mem_csr_wdata  <= ex2_csr_wdata;
             mem_csr_rdata  <= ex2_csr_rdata;
             mem_mret       <= ex2_mret;
+            mem_lr_w       <= ex2_lr_w;
+            mem_sc_w       <= ex2_sc_w;
             mem_valid      <= ex2_valid;
         end
         // When hazard_load_data, mul_stall, or div_stall: MEM stage holds
@@ -1061,8 +1085,46 @@ module riscv_soc (
 
     assign cpu_dmem_addr  = mem_alu_result;
     assign cpu_dmem_wdata = store_data_shifted;
-    assign cpu_dmem_we    = mem_mem_write && mem_valid;
     assign cpu_dmem_be    = store_byte_enable;
+
+    // -------------------------------------------------------------------------
+    // LR/SC Reservation Logic (A extension)
+    // -------------------------------------------------------------------------
+    // For single-hart, we just need to track if we have a valid reservation
+    // and at what address. SC succeeds if reservation is valid and address matches.
+    
+    logic        reservation_valid;
+    logic [31:0] reservation_addr;
+    logic        sc_success;  // SC.W succeeds (0) or fails (1)
+    
+    // SC succeeds if we have a valid reservation at the same address
+    assign sc_success = reservation_valid && (reservation_addr == mem_alu_result);
+    
+    // Only write to memory on SC.W if the reservation is valid
+    assign cpu_dmem_we = (mem_mem_write && mem_valid && !mem_sc_w) ||  // Normal store
+                         (mem_sc_w && mem_valid && sc_success);        // SC.W with valid reservation
+    
+    always_ff @(posedge clk) begin
+        if (cpu_rst) begin
+            reservation_valid <= 1'b0;
+            reservation_addr  <= 32'b0;
+        end else if (cpu_running) begin
+            if (mem_lr_w && mem_valid) begin
+                // LR.W: Set reservation
+                reservation_valid <= 1'b1;
+                reservation_addr  <= mem_alu_result;
+            end else if (mem_sc_w && mem_valid) begin
+                // SC.W: Clear reservation (whether success or fail)
+                reservation_valid <= 1'b0;
+            end else if (mem_mem_write && mem_valid) begin
+                // Any other store to reserved address invalidates reservation
+                if (reservation_valid && (reservation_addr == mem_alu_result)) begin
+                    reservation_valid <= 1'b0;
+                end
+            end
+            // Note: On a multi-hart system, we'd also invalidate on snoop/coherence events
+        end
+    end
 
     // -------------------------------------------------------------------------
     // Load data selection and sign extension
@@ -1101,6 +1163,8 @@ module riscv_soc (
     logic [1:0]  wb_addr_lo;
     logic        wb_jump;
     logic [31:0] wb_pc_plus4;
+    logic        wb_sc_w;      // SC.W instruction
+    logic        wb_sc_fail;   // SC.W failed (1) or succeeded (0)
 
     always_ff @(posedge clk) begin
         if (cpu_rst) begin
@@ -1109,6 +1173,7 @@ module riscv_soc (
             wb_mem_read  <= 1'b0;
             wb_jump      <= 1'b0;
             wb_ebreak    <= 1'b0;
+            wb_sc_w      <= 1'b0;
         end else if (cpu_running && !hazard_load_data) begin
             wb_alu_result    <= mem_alu_result;
             wb_load_data_raw <= mem_load_data_raw;
@@ -1120,6 +1185,8 @@ module riscv_soc (
             wb_mem_read      <= mem_mem_read;
             wb_jump          <= mem_jump;
             wb_ebreak        <= mem_ebreak;
+            wb_sc_w          <= mem_sc_w;
+            wb_sc_fail       <= mem_sc_w && !sc_success;  // 1 if SC failed, 0 if succeeded
             wb_valid         <= mem_valid;
         end
     end
@@ -1267,9 +1334,10 @@ module riscv_soc (
         endcase
     end
 
-    // Select write-back data: PC+4 for jumps, load data for loads, ALU result otherwise
+    // Select write-back data: PC+4 for jumps, load data for loads, SC result, or ALU result
     assign wb_rd_data = wb_jump     ? wb_pc_plus4 :
                         wb_mem_read ? wb_load_data :
+                        wb_sc_w     ? {31'b0, wb_sc_fail} :  // SC.W returns 0 on success, 1 on fail
                         wb_alu_result;
 
     // =========================================================================
