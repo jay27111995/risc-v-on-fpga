@@ -1096,18 +1096,18 @@ module riscv_soc (
     // -------------------------------------------------------------------------
     // For single-hart, we just need to track if we have a valid reservation
     // and at what address. SC succeeds if reservation is valid and address matches.
-    
+
     logic        reservation_valid;
     logic [31:0] reservation_addr;
     logic        sc_success;  // SC.W succeeds (0) or fails (1)
-    
+
     // SC succeeds if we have a valid reservation at the same address
     assign sc_success = reservation_valid && (reservation_addr == mem_alu_result);
-    
+
     // Only write to memory on SC.W if the reservation is valid
     assign cpu_dmem_we = (mem_mem_write && mem_valid && !mem_sc_w) ||  // Normal store
                          (mem_sc_w && mem_valid && sc_success);        // SC.W with valid reservation
-    
+
     always_ff @(posedge clk) begin
         if (cpu_rst) begin
             reservation_valid <= 1'b0;
@@ -1154,8 +1154,29 @@ module riscv_soc (
         endcase
     end
 
-    // Select between DMEM and timer reads
-    wire [31:0] mem_load_data_raw = is_timer_addr ? timer_rdata : cpu_dmem_rdata;
+    // -------------------------------------------------------------------------
+    // PLIC Stub - minimal PLIC at 0x0C000000 for Zephyr RTOS compatibility
+    // -------------------------------------------------------------------------
+    logic [31:0] plic_rdata;
+    logic        plic_hit;
+
+    plic_stub #(
+        .BASE_ADDR(32'h0C000000)
+    ) u_plic (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .addr   (cpu_dmem_addr),
+        .wdata  (cpu_dmem_wdata),
+        .we     (cpu_dmem_we && cpu_running),
+        .re     (mem_mem_read && mem_valid),
+        .rdata  (plic_rdata),
+        .hit    (plic_hit)
+    );
+
+    // Select between DMEM, timer, and PLIC reads
+    wire [31:0] mem_load_data_raw = plic_hit    ? plic_rdata  :
+                                    is_timer_addr ? timer_rdata :
+                                    cpu_dmem_rdata;
 
     // =========================================================================
     // MEM/WB Pipeline Register
