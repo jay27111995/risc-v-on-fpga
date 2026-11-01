@@ -37,20 +37,18 @@ module plic_stub #(
     // Check if address is in PLIC range: addr[31:22] matches base[31:22]
     wire addr_match = (addr[31:22] == BASE_ADDR[31:22]);
 
+    // Hit is combinational - active when address matches and read/write active
     assign hit = addr_match && (we || re);
 
-    // Always return 0 - no interrupts pending, no interrupt to claim
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            rdata <= 32'h0;
-        end else if (re && addr_match) begin
-            rdata <= 32'h0;
-        end
-    end
+    // rdata is combinational - always 0 (no interrupts pending)
+    // This ensures rdata is valid in the same cycle as hit
+    assign rdata = 32'h0;
 
     // Writes are accepted but ignored (no actual interrupt sources)
     // Mark unused signals to avoid lint warnings
     /* verilator lint_off UNUSEDSIGNAL */
+    wire _unused_clk = clk;
+    wire _unused_rst_n = rst_n;
     wire [21:0] _unused_addr = addr[21:0];
     wire [31:0] _unused_wdata = wdata;
     /* verilator lint_on UNUSEDSIGNAL */
